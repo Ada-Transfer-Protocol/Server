@@ -86,37 +86,37 @@ After installation via the script, use these global aliases to manage the server
 
 ---
 
+## 📚 Client SDKs
+
+Integrate AdaTP into your applications using our official SDKs.
+
+### [JavaScript / Web SDK](https://github.com/Ada-Transfer-Protocol/SDK-JS)
+The official browser-based SDK supporting Phone, Chat, Conference, and File Transfer modules.
+
+*   **Repository**: [github.com/Ada-Transfer-Protocol/SDK-JS](https://github.com/Ada-Transfer-Protocol/SDK-JS)
+*   **Documentation**: [Read Full Docs](https://github.com/Ada-Transfer-Protocol/SDK-JS#readme)
+*   **Features**:
+    *   `AdaTPPhone` (1-on-1 VoIP)
+    *   `AdaTPChat` (Real-time Messaging)
+    *   `AdaTPConference` (Group Voice Rooms)
+    *   Low-Code `config` integration.
+
+---
+
 ## 📂 Project Structure
 
 ```
 /adatp-server
 ├── /server           # Core Server Application
-│   ├── main.rs       # Entry point & Tokio runtime setup
-│   ├── api.rs        # WebSocket handler & Packet routing logic
-│   └── state.rs      # In-memory Room & User state management
-│
 ├── /core             # Shared Libraries (Used by Client & Server)
-│   ├── lib.rs        # Protocol Definitions (Bitwise flags, Opcodes)
-│   └── models.rs     # Structs for JSON payloads
-│
 ├── /tools            # DevOps & Utilities
 │   ├── setup.sh      # Universal Installer Script
 │   ├── uninstall.sh  # Uninstaller
 │   ├── install_service.sh # Systemd Generator
 │   └── /adatp-cli    # Rust-based Admin CLI tool
-│
 ├── /docs             # Documentation
 │   └── PROTOCOL_SPEC.md # Binary Protocol Specification (RFC-style)
 ```
-
----
-
-## 📦 Client SDKs
-
-*   **JavaScript / Web**: [Ada-Transfer-Protocol/SDK-JS](https://github.com/Ada-Transfer-Protocol/SDK-JS)
-    *   *Modules: Phone, Chat, Conference, File Transfer*
-*   *(Coming Soon)*: Python SDK
-*   *(Coming Soon)*: C++ Embedded SDK
 
 ## License
 MIT License. Copyright © 2024 Ada Transfer Protocol Team.
