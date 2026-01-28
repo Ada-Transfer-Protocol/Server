@@ -14,7 +14,14 @@ echo -e "\033[0m"
 echo "Select Install Mode:"
 echo "1) Full Installation (Server + CLI + Service)"
 echo "2) Development Setup (Clone only)"
-read -p "Choose (1/2): " choice
+
+# Force read from terminal tty to bypass stdin pipe issue
+if [ -t 0 ]; then
+    read -p "Choose (1/2): " choice
+else
+    # Fallback for piped content
+    read -p "Choose (1/2): " choice < /dev/tty
+fi
 
 if [ "$choice" == "1" ]; then
     echo "⬇️  Downloading AdaTP Server..."
