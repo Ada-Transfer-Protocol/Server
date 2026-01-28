@@ -1,0 +1,14 @@
+/target
+Cargo.lock
+server.log
+/core/target
+/core/Cargo.lock
+/core/server.log
+/core/target/
+
+
+/server/target
+/server/Cargo.lock
+/server/server.log
+/server/target/
+

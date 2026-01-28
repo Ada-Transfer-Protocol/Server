@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "core",
+    "server",
+    "tools/adatp-cli"
+]
+resolver = "2"

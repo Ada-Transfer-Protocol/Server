@@ -1,0 +1,51 @@
+    Checking adatp-core v0.1.0 (/Users/thecoder/Desktop/AdaTP/adatp/core)
+warning: unused import: `std::convert::TryFrom`
+ --> src/codec/packet.rs:3:5
+  |
+3 | use std::convert::TryFrom;
+  |     ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `std::io`
+ --> src/codec/serializer.rs:2:5
+  |
+2 | use std::io;
+  |     ^^^^^^^
+
+warning: unused import: `StaticSecret`
+ --> src/crypto/x25519.rs:1:48
+  |
+1 | use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
+  |                                                ^^^^^^^^^^^^
+
+error[E0512]: cannot transmute between types of different sizes, or dependently-sized types
+  --> src/codec/packet.rs:76:18
+   |
+76 |         unsafe { std::mem::transmute(v) } // Quick convert, but unsafe if enum is not exhaustive.
+   |                  ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: source type: `u16` (16 bits)
+   = note: target type: `()` (0 bits)
+
+error[E0599]: no function or associated item named `generate` found for struct `SigningKey` in the current scope
+   --> src/crypto/ed25519.rs:12:35
+    |
+12  |         let keypair = SigningKey::generate(&mut csprng);
+    |                                   ^^^^^^^^ function or associated item not found in `SigningKey`
+    |
+note: if you're trying to build a new `SigningKey` consider using one of the following associated functions:
+      SigningKey::from_bytes
+      SigningKey::from_keypair_bytes
+   --> /Users/thecoder/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ed25519-dalek-2.2.0/src/signing.rs:104:5
+    |
+104 |     pub fn from_bytes(secret_key: &SecretKey) -> Self {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+138 |     pub fn from_keypair_bytes(bytes: &[u8; 64]) -> Result<SigningKey, SignatureError> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0512, E0599.
+For more information about an error, try `rustc --explain E0512`.
+warning: `adatp-core` (lib) generated 3 warnings
+error: could not compile `adatp-core` (lib) due to 2 previous errors; 3 warnings emitted

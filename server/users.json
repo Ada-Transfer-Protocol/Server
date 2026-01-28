@@ -1,0 +1,32 @@
+[
+    {
+        "username": "admin",
+        "password": "secret_password",
+        "role": "admin"
+    },
+    {
+        "username": "user1",
+        "password": "password123",
+        "role": "user"
+    },
+    {
+        "username": "filebot",
+        "password": "secret_password",
+        "role": "bot"
+    },
+    {
+        "username": "pybot",
+        "password": "secret_password",
+        "role": "bot"
+    },
+    {
+        "username": "phpbot",
+        "password": "secret_password",
+        "role": "bot"
+    },
+    {
+        "username": "cbot",
+        "password": "secret_password",
+        "role": "bot"
+    }
+]
