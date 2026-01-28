@@ -1,70 +1,71 @@
 #!/bin/bash
 
-# AdaTP Server & CLI Installer Script (Fixed Paths)
+# AdaTP Server & CLI Installer Script (English)
 
-# Hata olursa durdurma (bazı adımlar opsiyonel olabilir) ama kopyalamada dur
-# set -e 
+echo "🚀 Starting AdaTP Installation..."
 
-echo "🚀 AdaTP Kurulumu Başlatılıyor..."
-
-# 1. Rust Kontrolü
+# 1. Rust Check
 if ! command -v cargo &> /dev/null; then
-    echo "❌ Rust (cargo) bulunamadı."
+    echo "❌ Rust (cargo) not found."
     exit 1
 fi
 
-# 2. Build İşlemleri
-# HACK: Vendor klasörü ile ilgili checksum sorunlarını aşmak için online build yapıyoruz.
+# 2. Build Process
+# HACK: Bypass vendoring issues by removing local config if exists, forcing online build.
 if [ -f ".cargo/config.toml" ]; then
-    echo "⚠️  Vendoring bypass ediliyor (Online Build Modu)..."
+    echo "⚠️  Bypassing vendoring (Online Build Mode)..."
     rm -f .cargo/config.toml
 fi
 
-echo "📦 Sunucu derleniyor (Release mod)..."
+echo "📦 Building Server (Release mode)..."
 cargo build --release --bin adatp-server
 
-echo "📦 CLI Aracı derleniyor..."
+echo "📦 Building CLI Tool..."
 if [ -d "tools/adatp-cli" ]; then
     cd tools/adatp-cli
     cargo build --release
     cd ../..
 else
+    # Fallback if in root workspace
     cargo build --release --bin adatp-cli
 fi
 
-# 3. Binary Konumlarını Bulma (Akıllı Arama)
+# 3. Locate Binaries (Smart Search)
 SERVER_BIN=$(find . -type f -name adatp-server | grep "release/adatp-server" | head -n 1)
 CLI_BIN=$(find . -type f -name adatp-cli | grep "release/adatp-cli" | head -n 1)
 
 if [ -z "$SERVER_BIN" ]; then
-    echo "❌ HATA: adatp-server binary dosyası bulunamadı!"
+    echo "❌ ERROR: adatp-server binary not found!"
     exit 1
 fi
 
 if [ -z "$CLI_BIN" ]; then
-    echo "❌ HATA: adatp-cli binary dosyası bulunamadı!"
+    echo "❌ ERROR: adatp-cli binary not found!"
     exit 1
 fi
 
-echo "✅ Binary bulundu: $SERVER_BIN"
-echo "✅ Binary bulundu: $CLI_BIN"
+echo "✅ Found Binary: $SERVER_BIN"
+echo "✅ Found Binary: $CLI_BIN"
 
-# 4. Binary'leri Taşıma
-echo "📂 Binary dosyaları /usr/local/bin konumuna kopyalanıyor..."
+# 4. Move Binaries
+echo "📂 Installing binaries to /usr/local/bin..."
+# Remove old links if any
+rm -f /usr/local/bin/adatp-server
+rm -f /usr/local/bin/adatp
+
 cp "$SERVER_BIN" /usr/local/bin/adatp-server
 cp "$CLI_BIN" /usr/local/bin/adatp
 
-# İzinleri ayarla
 chmod +x /usr/local/bin/adatp-server
 chmod +x /usr/local/bin/adatp
 
-echo "✅ 'adatp-server' ve 'adatp' yüklendi."
+echo "✅ Installed 'adatp-server' and 'adatp' (CLI)."
 
-# 5. Systemd Servisi
-echo "⚙️  Systemd servisi oluşturuluyor..."
-SERVICE_FILE="/etc/systemd/system/adatp.service"
+# 5. Create Systemd Service
+echo "⚙️  Creating Systemd Service..."
+SERVICE_FILE="/etc/systemd/system/adatp-server.service"
 
-# Servis içeriği
+# Service Content
 cat > $SERVICE_FILE <<EOF
 [Unit]
 Description=AdaTP Real-Time Server
@@ -77,35 +78,41 @@ ExecStart=/usr/local/bin/adatp-server
 Restart=always
 RestartSec=3
 Environment=RUST_LOG=info
-# WorkingDirectory=/var/lib/adatp/ (Opsiyonel, DB için)
+Environment=PORT=3000
+Environment=HOST=0.0.0.0
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-# Systemd Reload & Start
+# Reload & Start
 systemctl daemon-reload
-systemctl enable adatp
-systemctl restart adatp
+systemctl enable adatp-server
+systemctl restart adatp-server
 
-if systemctl is-active --quiet adatp; then
-    echo "✅ Servis BAŞARIYLA başlatıldı."
+# Alias for 'adatp' service name as well for backward compatibility logic
+# (Optional)
+
+if systemctl is-active --quiet adatp-server; then
+    echo "✅ Service 'adatp-server' started SUCCESSFULLY."
 else
-    echo "⚠️  Servis başlatılamadı. 'systemctl status adatp' ile kontrol edin."
+    echo "⚠️  Service failed to start. Check with 'systemctl status adatp-server'."
 fi
 
-# 6. Alias Ekleme
+# 6. Shell Aliases
 SHELL_RC="$HOME/.bashrc"
 if [ -f "$HOME/.zshrc" ]; then SHELL_RC="$HOME/.zshrc"; fi
 
-grep -q "alias adatp-log=" "$SHELL_RC" || echo "alias adatp-log='journalctl -u adatp -f'" >> "$SHELL_RC"
-grep -q "alias adatp-restart=" "$SHELL_RC" || echo "alias adatp-restart='systemctl restart adatp'" >> "$SHELL_RC"
-grep -q "alias adatp-stop=" "$SHELL_RC" || echo "alias adatp-stop='systemctl stop adatp'" >> "$SHELL_RC"
-grep -q "alias adatp-status=" "$SHELL_RC" || echo "alias adatp-status='systemctl status adatp'" >> "$SHELL_RC"
+# Add useful aliases if not present
+grep -q "alias adatp-log=" "$SHELL_RC" || echo "alias adatp-log='journalctl -u adatp-server -f'" >> "$SHELL_RC"
+grep -q "alias adatp-restart=" "$SHELL_RC" || echo "alias adatp-restart='systemctl restart adatp-server'" >> "$SHELL_RC"
+grep -q "alias adatp-stop=" "$SHELL_RC" || echo "alias adatp-stop='systemctl stop adatp-server'" >> "$SHELL_RC"
+grep -q "alias adatp-status=" "$SHELL_RC" || echo "alias adatp-status='systemctl status adatp-server'" >> "$SHELL_RC"
 
 echo ""
-echo "🎉 Kurulum Tamamlandı!"
+echo "🎉 Installation Complete!"
 echo "------------------------------------------------"
-echo " sunucu durumu : systemctl status adatp"
-echo " loglar        : journalctl -u adatp -f"
+echo " Server Status : adatp-status  (or systemctl status adatp-server)"
+echo " Live Logs     : adatp-log"
+echo " CLI Tool      : adatp --help"
 echo "------------------------------------------------"
