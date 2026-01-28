@@ -95,7 +95,7 @@ async fn main() -> Result<()> {
         let (cipher, tag, seq) = secure_session.encrypt(&login_bytes)?;
         
         let mut login_pkt = Packet::new(
-            MessageType::LoginRequest,
+            MessageType::AuthRequest,
             Bytes::from(cipher),
             response_packet.header.session_id
         );
@@ -109,11 +109,14 @@ async fn main() -> Result<()> {
         let resp = transport.read_packet().await?
              .ok_or(anyhow!("Closed during login"))?;
              
-        if resp.header.msg_type == MessageType::LoginResponse {
+        if resp.header.msg_type == MessageType::AuthResponse || resp.header.msg_type == MessageType::AuthSuccess {
              let decrypted = secure_session.decrypt(&resp)?;
              println!("✅ Login Response: {}", String::from_utf8_lossy(&decrypted));
+        } else if resp.header.msg_type == MessageType::AuthFailure {
+             let decrypted = secure_session.decrypt(&resp)?;
+             println!("❌ Login Failed: {}", String::from_utf8_lossy(&decrypted));
         } else {
-             println!("❌ Expected LoginResponse, got {:?}", resp.header.msg_type);
+             println!("❌ Expected AuthResponse, got {:?}", resp.header.msg_type);
         }
     } else {
         println!("Skipping Login (No credentials provided)");

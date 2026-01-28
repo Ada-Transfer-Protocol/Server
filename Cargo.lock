@@ -10,6 +10,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "serde_json",
  "tokio",
  "uuid",
 ]
