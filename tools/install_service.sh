@@ -109,11 +109,14 @@ grep -q "alias adatp-restart=" "$SHELL_RC" || echo "alias adatp-restart='systemc
 grep -q "alias adatp-stop=" "$SHELL_RC" || echo "alias adatp-stop='systemctl stop adatp-server'" >> "$SHELL_RC"
 grep -q "alias adatp-status=" "$SHELL_RC" || echo "alias adatp-status='systemctl status adatp-server'" >> "$SHELL_RC"
 
+# Force MOTD Display
+grep -q "99-adatp-motd.sh" "$SHELL_RC" || echo "[ -f /etc/profile.d/99-adatp-motd.sh ] && source /etc/profile.d/99-adatp-motd.sh" >> "$SHELL_RC"
+
 # 7. Add SSH Welcome Message (MOTD)
 echo "🎨 Configuring SSH Welcome Message..."
 MOTD_FILE="/etc/profile.d/99-adatp-motd.sh"
 
-cat > \$MOTD_FILE <<'EOF'
+cat > $MOTD_FILE <<'EOF'
 #!/bin/bash
 # AdaTP Welcome Screen
 
