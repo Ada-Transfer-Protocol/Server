@@ -1,78 +1,113 @@
 # Ada Transfer Protocol (Server)
 
-**High-Performance Real-Time Communication Server** powered by Rust.
+![AdaTP](https://img.shields.io/badge/AdaTP-v2.0-blueviolet?style=for-the-badge) ![Rust](https://img.shields.io/badge/Built%20With-Rust-orange?style=for-the-badge) ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-This repository contains the reference implementation of the **AdaTP Server**, designed to handle massive concurrency for Voice, Video, and Signaling with minimal latency.
-
-## 🚀 Features
-
-*   **Ultra-Low Latency**: Built on `tokio` asynchronous runtime.
-*   **Binary Protocol**: Custom framing for minimal overhead (Header + Payload).
-*   **Room Management**: Dynamic room creation and isolation.
-*   **Global & Private Signaling**: Direct routing of signaling messages (`INVITE`, `ACCEPT`).
-*   **Production Ready**: Includes systemd service scripts and CLI tools.
-*   **Cross-Platform**: Runs on Linux, macOS, and Windows.
+**High-Performance Real-Time Communication Server** designed for massive concurrency, ultra-low latency voice/video, and instant signaling.
 
 ---
 
-## 🛠 Installation & Usage
+## 🚀 Quick Install (One-Line)
 
-### 1. Development Mode
+Install **AdaTP Server** and **CLI Tools** as a background service on Linux/macOS with a single command:
 
 ```bash
-# Clone Repository
+curl -sSL https://raw.githubusercontent.com/Ada-Transfer-Protocol/Server/main/tools/install.sh | bash
+```
+
+**Installer Output:**
+```text
+   _       _       _____ ____  
+  /_\   __| | __ _|_   _|  _ \ 
+ //_\\ / _` |/ _` | | | | |_) |
+/  _  \ (_| | (_| | | | |  __/ 
+\_/ \_/\__,_|\__,_| |_| |_|    
+
+Select Install Mode:
+1) Full Installation (Server + CLI + Service)
+2) Development Setup (Clone only)
+> 1
+
+📦 Building Server (Release)...
+📦 Building CLI...
+⚙️  Creating Systemd Service...
+✅ Service 'adatp' is ACTIVE.
+```
+
+---
+
+## 🛠 Manual Installation & Development
+
+### Prerequisites
+*   **Rust (Cargo)**: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+
+### 1. Run in Dev Mode
+```bash
 git clone https://github.com/Ada-Transfer-Protocol/Server.git
 cd Server
-
-# Run Development Server
 cargo run --bin adatp-server
 ```
-Server listens on `0.0.0.0:3000` by default.
 
-### 2. Production Deployment (Linux Service)
-
-We provide an automated script to build, install, and run AdaTP as a systemd service.
-
-```bash
-chmod +x tools/install_service.sh
-./tools/install_service.sh
+**Expected Output:**
+```text
+INFO  adatp_server > 🚀 AdaTP Server v2.0 started on 0.0.0.0:3000
+INFO  adatp_server > 💾 Database connected: adatp.db
+INFO  adatp_server > 🔌 WebSocket listening...
 ```
 
-**What this script does:**
-*   Compiles `adatp-server` and `adatp-cli` in release mode.
-*   Installs binaries to `/usr/local/bin`.
-*   Creates and enables a `systemd` service (`adatp`).
-*   Adds useful shell aliases for management.
+---
 
-### 3. Management Commands
+## 💻 Management CLI
 
-Once installed via the script, you can use these shortcuts:
+Once installed via the script, you get powerful shortcuts managed by `systemd`.
 
-| Command | Description |
-| :--- | :--- |
-| `adatp-status` | Check server status. |
-| `adatp-restart` | Restart the server service. |
-| `adatp-stop` | Stop the server. |
-| `adatp-log` | Watch live server logs (`journalctl -f`). |
-| `adatp --help` | interactive CLI tool. |
+| Command | Action | Example Output |
+| :--- | :--- | :--- |
+| **`adatp-status`** | Check service health | `● adatp.service - AdaTP Server... Active: active (running)` |
+| **`adatp-log`** | Live server logs | `Jun 24 10:00:00 server adatp[123]: [INFO] New connection: 192.168.1.5` |
+| **`adatp-restart`** | Restart service | `Restarting adatp.service... Done.` |
+| **`adatp-stop`** | Stop service | `Stopping adatp.service... Done.` |
+
+### Admin CLI Tool (`adatp`)
+The `adatp` command allows you to inspect the running server state.
+
+```bash
+adatp inspect --room lobby
+```
+**Output:**
+```json
+{
+  "room_id": "lobby",
+  "users": [
+    { "id": "A1B2", "role": "admin", "audio": "active" },
+    { "id": "C3D4", "role": "guest", "audio": "muted" }
+  ]
+}
+```
 
 ---
 
-## 📚 Protocol Specification
+## 📚 Protocol & SDKs
 
-For full binary details, see [PROTOCOL_SPEC.md](docs/PROTOCOL_SPEC.md).
+AdaTP is built to be modular.
 
-## 📦 Client SDKs
-
-*   **JavaScript / Web**: [Ada-Transfer-Protocol/SDK-JS](https://github.com/Ada-Transfer-Protocol/SDK-JS)
+*   📖 **Protocol Spec**: [Read the Binary Specification](docs/PROTOCOL_SPEC.md)
+*   🌐 **JavaScript SDK**: [Ada-Transfer-Protocol/SDK-JS](https://github.com/Ada-Transfer-Protocol/SDK-JS)
+    *   *Includes: Phone, Chat, Conference, File Transfer modules.*
 
 ---
 
-## 📂 Project Structure
+## 📂 Architecture
 
-*   **/server**: The Rust server implementation.
-*   **/core**: Shared libraries and models.
-*   **/tools**: CLI utilities and deployment scripts.
+```
+/adatp
+├── /server       # Main Rust Server (Tokio + Tungstenite)
+├── /core         # Shared Logic (Packets, Auth, Database)
+├── /tools
+│   ├── /adatp-cli      # Admin CLI Tool logic
+│   ├── install.sh      # One-line installer
+│   └── install_service.sh # Systemd generator
+└── /docs         # Documentation
+```
 
 ## License
-MIT
+MIT © Ada Transfer Protocol Team
