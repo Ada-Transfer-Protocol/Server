@@ -130,20 +130,38 @@ EOF
 
 cat >> \$MOTD_FILE <<EOF
     
+    # --- Configuration Data ---
+    IP_ADDR=\$(hostname -I | cut -d' ' -f1)
     # Check Status
     if systemctl is-active --quiet adatp-server; then
-        STATUS="\033[1;32mACTIVE\033[0m"
+        STATUS="\033[1;32mACTIVE (Running)\033[0m"
     else
         STATUS="\033[1;31mSTOPPED\033[0m"
     fi
     
-    # Detect IP
-    IP_ADDR=\$(hostname -I | cut -d' ' -f1)
-    
-    echo -e " :: AdaTP Server ::    [ \$STATUS ]"
-    echo -e " :: Internal URL ::    ws://127.0.0.1:3000"
-    echo -e " :: External URL ::    ws://\$IP_ADDR:3000"
-    echo -e " :: Monitor      ::    adatp-log"
+    # Get Service Uptime (Simplified)
+    UPTIME=\$(systemctl show -p ActiveEnterTimestamp adatp-server | cut -d'=' -f2)
+    if [ -z "\$UPTIME" ]; then UPTIME="N/A"; fi
+
+    echo -e " ----------------------------------------------------------------"
+    echo -e " \033[1;34m:: SYSTEM INFO ::\033[0m"
+    echo -e "  • Status       : \$STATUS"
+    echo -e "  • Uptime       : \$UPTIME"
+    echo -e "  • Version      : v2.0 (Stable)"
+    echo -e "  • Server Host  : \$IP_ADDR"
+    echo -e "  • Server Port  : 3000"
+    echo -e "  • WS URL       : ws://\$IP_ADDR:3000"
+    echo -e ""
+    echo -e " \033[1;34m:: CONFIGURATION ::\033[0m"
+    echo -e "  • Log Type     : info (Standard Output)"
+    echo -e "  • Auth Type    : Token / Basic (Internal DB)"
+    echo -e "  • Database     : SQLite (adatp.db)"
+    echo -e ""
+    echo -e " \033[1;34m:: CREDITS ::\033[0m"
+    echo -e "  • Developer    : \033[1;36mCengiz AKCAN\033[0m"
+    echo -e "  • Organization : https://github.com/Ada-Transfer-Protocol"
+    echo -e "  • Repository   : https://github.com/Ada-Transfer-Protocol/Server"
+    echo -e " ----------------------------------------------------------------"
     echo ""
 fi
 EOF
