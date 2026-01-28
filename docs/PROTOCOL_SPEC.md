@@ -22,7 +22,7 @@ Each packet consists of a **Header** (3 bytes) and a **Payload**.
 | `0x0031` | **FileChunk** | Binary Data Chunk. |
 | `0x0033` | **FileComplete** | SHA-256 Checksum (Optional). |
 | `0x0044` | **VoiceData** | PCM Audio Chunk (16kHz, S16LE, Mono). |
-| `0x0053` | **VideoData** | Binary Frame (e.g. H264/VP8 chunk). |
+| `0x0053` | **Reserved** | (Reserved for Future Video Support). |
 | `0x0060` | **PresenceUpdate**| UTF-8: "JOIN" or "LEAVE" or "BUSY". |
 | `0x00A0` | **JoinRoom** | UTF-8 Room Name (e.g. "lobby", "meeting-1"). |
 

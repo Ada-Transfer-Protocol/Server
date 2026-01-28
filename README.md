@@ -2,7 +2,7 @@
 
 ![AdaTP](https://img.shields.io/badge/AdaTP-v2.0-blueviolet?style=for-the-badge) ![Rust](https://img.shields.io/badge/Built%20With-Rust-orange?style=for-the-badge) ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge) ![Uptime](https://img.shields.io/badge/Uptime-99.9%25-success?style=for-the-badge)
 
-**AdaTP (Ada Transfer Protocol)** is a next-generation, high-performance real-time communication server built with Rust. It is designed to handle massive concurrency for Voice (VoIP), Video, and Signaling with ultra-low latency.
+**AdaTP (Ada Transfer Protocol)** is a next-generation, high-performance real-time communication server built with Rust. It is designed to handle massive concurrency for Voice (VoIP), Signaling, and File Transfer with ultra-low latency.
 
 Unlike traditional heavy protocols (SIP/WebRTC stacks), AdaTP uses a **lightweight binary framing protocol** over WebSocket/TCP, making it ideal for AI Agents, IoT devices, and High-Frequency Trading systems.
 
