@@ -11,7 +11,7 @@
 Install **AdaTP Server** and **CLI Tools** as a background service on Linux/macOS with a single command:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Ada-Transfer-Protocol/Server/main/tools/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/Ada-Transfer-Protocol/Server/main/tools/setup.sh | bash
 ```
 
 **Installer Output:**
@@ -104,7 +104,7 @@ AdaTP is built to be modular.
 ├── /core         # Shared Logic (Packets, Auth, Database)
 ├── /tools
 │   ├── /adatp-cli      # Admin CLI Tool logic
-│   ├── install.sh      # One-line installer
+│   ├── setup.sh      # One-line installer
 │   └── install_service.sh # Systemd generator
 └── /docs         # Documentation
 ```
