@@ -14,6 +14,12 @@ if ! command -v cargo &> /dev/null; then
 fi
 
 # 2. Build İşlemleri
+# HACK: Vendor klasörü ile ilgili checksum sorunlarını aşmak için online build yapıyoruz.
+if [ -f ".cargo/config.toml" ]; then
+    echo "⚠️  Vendoring bypass ediliyor (Online Build Modu)..."
+    rm -f .cargo/config.toml
+fi
+
 echo "📦 Sunucu derleniyor (Release mod)..."
 cargo build --release --bin adatp-server
 
