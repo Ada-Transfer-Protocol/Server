@@ -37,7 +37,7 @@ AdaTP is extremely efficient. It can run on a Raspberry Pi or a high-end server.
 
 ### One-Line Automated Install (Universal Linux)
 
-This script auto-detects your OS, installs dependencies (Rust, GCC, SSL), builds the server, and sets up a systemd service.
+This script auto-detects your OS, installs dependencies (Rust, GCC, SSL), builds the server, and sets up a systemd service (`adatp-server`).
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/Ada-Transfer-Protocol/Server/main/tools/setup.sh | bash
@@ -49,6 +49,12 @@ curl -sSL https://raw.githubusercontent.com/Ada-Transfer-Protocol/Server/main/to
 git clone https://github.com/Ada-Transfer-Protocol/Server.git
 cd Server
 cargo run --bin adatp-server
+```
+
+### Uninstall
+To completely remove AdaTP from your system:
+```bash
+curl -sSL https://raw.githubusercontent.com/Ada-Transfer-Protocol/Server/main/tools/uninstall.sh | bash
 ```
 
 ---
@@ -63,16 +69,6 @@ You can configure the server by setting environment variables or creating a `.en
 | `PORT` | `3000` | Listening port for WebSocket connections. |
 | `DATABASE_URL` | `sqlite:adatp.db` | Path to the SQLite database file. |
 | `RUST_LOG` | `info` | Log level: `error`, `warn`, `info`, `debug`, `trace`. |
-| `MAX_CONNECTIONS` | `10000` | Soft limit for concurrent socket connections. |
-| `AUTH_ENABLED` | `true` | Set to `false` to disable handshake auth (Dev only). |
-
-**Example `.env` file:**
-```env
-HOST=0.0.0.0
-PORT=8080
-RUST_LOG=debug
-DATABASE_URL=sqlite:///var/lib/adatp/production.db
-```
 
 ---
 
@@ -82,10 +78,11 @@ After installation via the script, use these global aliases to manage the server
 
 | Command | Description |
 | :--- | :--- |
-| `adatp-status` | Show service health (`systemctl status adatp`). |
-| `adatp-log` | Tail live logs (`journalctl -u adatp -f`). |
+| `adatp-status` | Show service health (`systemctl status adatp-server`). |
+| `adatp-log` | Tail live logs (`journalctl -u adatp-server -f`). |
 | `adatp-restart` | Restart the process. |
 | `adatp-stop` | Stop the service. |
+| `adatp` | Launch the **Interactive Admin CLI**. |
 
 ---
 
@@ -104,6 +101,7 @@ After installation via the script, use these global aliases to manage the server
 │
 ├── /tools            # DevOps & Utilities
 │   ├── setup.sh      # Universal Installer Script
+│   ├── uninstall.sh  # Uninstaller
 │   ├── install_service.sh # Systemd Generator
 │   └── /adatp-cli    # Rust-based Admin CLI tool
 │
