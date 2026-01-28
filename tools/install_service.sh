@@ -137,8 +137,12 @@ cat >> \$MOTD_FILE <<EOF
         STATUS="\033[1;31mSTOPPED\033[0m"
     fi
     
+    # Detect IP
+    IP_ADDR=\$(hostname -I | cut -d' ' -f1)
+    
     echo -e " :: AdaTP Server ::    [ \$STATUS ]"
-    echo -e " :: Port         ::    [ 3000 ]"
+    echo -e " :: Internal URL ::    ws://127.0.0.1:3000"
+    echo -e " :: External URL ::    ws://\$IP_ADDR:3000"
     echo -e " :: Monitor      ::    adatp-log"
     echo ""
 fi
