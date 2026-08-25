@@ -53,6 +53,13 @@ pub struct Config {
     /// `adatp-identity.key`. Generated (0600) on first boot; its public key is
     /// what clients pin. Unused on v1-only deployments.
     pub identity_path: String,
+    /// Minimum protocol version accepted at the handshake.
+    /// `ADATP_MIN_PROTOCOL_VERSION`, default 1. **Set to 2 to REQUIRE the
+    /// authenticated v2 handshake** and reject any client that offers the
+    /// unauthenticated v1 — the downgrade defense for deployments without TLS.
+    /// The default stays 1 for backward compatibility until every SDK speaks v2;
+    /// production on an untrusted network should set 2 (and pin the server key).
+    pub min_protocol_version: u8,
 }
 
 impl Config {
@@ -138,6 +145,11 @@ impl Config {
         let identity_path =
             env::var("ADATP_IDENTITY_PATH").unwrap_or_else(|_| "adatp-identity.key".to_string());
 
+        let min_protocol_version: u8 = env::var("ADATP_MIN_PROTOCOL_VERSION")
+            .unwrap_or_else(|_| "1".to_string())
+            .parse()
+            .expect("ADATP_MIN_PROTOCOL_VERSION must be a number (1 or 2)");
+
         Self {
             host,
             port,
@@ -154,6 +166,7 @@ impl Config {
             room_protected_prefix,
             room_protected_role,
             identity_path,
+            min_protocol_version,
         }
     }
 
@@ -204,6 +217,7 @@ mod tests {
             room_protected_prefix: None,
             room_protected_role: "admin".into(),
             identity_path: "adatp-identity.key".into(),
+            min_protocol_version: 1,
         }
     }
 

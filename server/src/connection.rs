@@ -364,6 +364,17 @@ async fn handle_packet(
             if conn.authed.is_some() || conn.secure.is_some() {
                 return Flow::Close("handshake_replay");
             }
+            // Downgrade floor: reject a handshake below the configured minimum
+            // protocol version. With ADATP_MIN_PROTOCOL_VERSION=2 a client cannot
+            // fall back to the unauthenticated v1 flow (it must run authenticated
+            // v2), which is the server-side half of the downgrade defense.
+            if packet.header.version < state.cfg.min_protocol_version {
+                debug!(
+                    "rejecting handshake from {remote}: version {} < min {}",
+                    packet.header.version, state.cfg.min_protocol_version
+                );
+                return Flow::Close("protocol_version_too_low");
+            }
             if packet.payload.len() >= 32 {
                 let mut epk_c = [0u8; 32];
                 epk_c.copy_from_slice(&packet.payload[..32]);
