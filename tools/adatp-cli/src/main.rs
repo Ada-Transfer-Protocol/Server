@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use adatp_core::codec::packet::{MessageType, Packet, PacketFlags};
+use adatp_core::codec::packet::{MessageType, Packet};
 use adatp_core::crypto::x25519::{diffie_hellman, KeyPair};
 use bytes::Bytes;
 use clap::Parser;
@@ -106,13 +106,12 @@ async fn main() -> Result<()> {
     );
 
     // 5. HANDSHAKE_COMPLETE
-    let (ciphertext, tag, seq) = secure_session
-        .encrypt(b"Verification OK")
-        .map_err(|e| anyhow!("Encryption error: {:?}", e))?;
     let mut complete_packet =
-        Packet::new(MessageType::HandshakeComplete, Bytes::from(ciphertext), session_id);
-    complete_packet.header.flags = PacketFlags::ENCRYPTED;
-    complete_packet.header.sequence = seq;
+        Packet::new(MessageType::HandshakeComplete, Bytes::new(), session_id);
+    let (ciphertext, tag) = secure_session
+        .encrypt(b"Verification OK", &mut complete_packet.header)
+        .map_err(|e| anyhow!("Encryption error: {:?}", e))?;
+    complete_packet.payload = Bytes::from(ciphertext);
     complete_packet.auth_tag = Some(tag);
     tx.send(Message::Binary(complete_packet.to_bytes().to_vec())).await?;
     println!("Sent HANDSHAKE_COMPLETE -> Secure session established 🔒");
@@ -126,10 +125,10 @@ async fn main() -> Result<()> {
             "password": p,
             "device_id": "cli-tool"
         });
-        let (cipher, tag, seq) = secure_session.encrypt(&serde_json::to_vec(&login_json)?)?;
-        let mut login_pkt = Packet::new(MessageType::AuthRequest, Bytes::from(cipher), session_id);
-        login_pkt.header.flags = PacketFlags::ENCRYPTED;
-        login_pkt.header.sequence = seq;
+        let mut login_pkt = Packet::new(MessageType::AuthRequest, Bytes::new(), session_id);
+        let (cipher, tag) =
+            secure_session.encrypt(&serde_json::to_vec(&login_json)?, &mut login_pkt.header)?;
+        login_pkt.payload = Bytes::from(cipher);
         login_pkt.auth_tag = Some(tag);
         tx.send(Message::Binary(login_pkt.to_bytes().to_vec())).await?;
 
