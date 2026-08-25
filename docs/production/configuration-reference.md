@@ -21,6 +21,14 @@ user list, reloadable at runtime via `POST /admin/v1/users/reload`.
 | `AUTH_FILE_PATH` | `users.json` | path | User file for the `file` driver (plaintext passwords — **dev/demo only**). Falls back to `server/<path>` for workspace-root runs. |
 | `AUTH_API_URL` | — | URL | External verifier for the `api` driver. `POST {username,password}` → `{authorized,user_id,role}`, 5 s timeout, **fail-closed**. Required when `AUTH_DRIVER=api`. |
 
+**File driver is fail-closed at startup.** When `AUTH_DRIVER=file` (including the
+default), the server **refuses to start** if no readable user file is found or the
+file defines zero users — it will *not* silently come up with no valid logins or
+with leftover demo credentials. Copy `server/users.example.json` to
+`server/users.json` (git-ignored) and set real values, or choose `AUTH_DRIVER=api`
+/ `AUTH_DRIVER=none` explicitly. The repository ships **no** `users.json`; the
+`none` and `api` drivers never touch a user file.
+
 Driver details and backend examples: [auth-providers.md](./auth-providers.md).
 
 ## Limits & timeouts
@@ -29,7 +37,26 @@ Driver details and backend examples: [auth-providers.md](./auth-providers.md).
 | :-- | :-- | :-- | :-- |
 | `MAX_FRAME_BYTES` | `1048576` (1 MiB) | usize | Maximum accepted AdaTP payload. Oversized frames close the connection (`frame_too_large`). Also caps the WS message size (+4 KiB header slack). |
 | `IDLE_TIMEOUT_SECS` | `90` | u64 | Connections with no inbound traffic for this long are dropped. The server sends WS protocol pings every 30 s; any conforming client stays alive automatically. |
-| `MAX_CONNECTIONS` | `10000` | usize | **Reporting hint only** — surfaces in `/admin/v1/lb-hints` as capacity; the server does not refuse connections above it. |
+| `MAX_CONNECTIONS` | `10000` | usize | **Hard cap on concurrent WebSocket connections.** New connections above the cap are rejected at the HTTP upgrade with `503 max connections reached`. The reservation is released when the connection closes (no leak on a rejected/abandoned upgrade). Also surfaces in `/admin/v1/lb-hints` as capacity. |
+| `MSG_RATE_LIMIT` | `200` | u32 | Per-connection inbound message rate limit in **messages/second** (token bucket; the value is also the burst size). A connection that exceeds it is closed (`rate_limited`). `0` disables the limit. Applies to AdaTP binary frames; WS ping/pong keepalives are exempt. |
+
+## Authorization (rooms)
+
+Room joins are gated by two independent, real mechanisms enforced **before** a
+join takes effect: this built-in config policy, and a plugin `join` **veto**
+hook (a policy plugin that replies `allow:false` blocks the join — mirrors the
+`auth` and `tool_before` veto hooks). Both default to permissive, so public
+rooms keep working until an operator opts in.
+
+| Variable | Default | Type | Effect |
+| :-- | :-- | :-- | :-- |
+| `ROOM_ALLOWLIST` | — (empty) | csv | Comma-separated room allowlist. When non-empty, only listed rooms may be joined; others are rejected (`room_not_allowed`). Empty = every room allowed. |
+| `ROOM_PROTECTED_PREFIX` | — (unset) | string | Rooms whose name **starts with** this prefix require `ROOM_PROTECTED_ROLE`. Unset = no prefix is protected. Example: `admin-`. |
+| `ROOM_PROTECTED_ROLE` | `admin` | string | Role a user must have to join a `ROOM_PROTECTED_PREFIX` room. Others are rejected (`room_forbidden`). |
+
+A denied join returns an `AuthFailure` frame (`{"error":"room_not_allowed"}`,
+`{"error":"room_forbidden"}`, or `{"error":"forbidden"}` for a plugin veto) and
+leaves the connection open in its current room.
 
 ## Persistence & platform
 
@@ -66,6 +93,7 @@ PLUGINS_DIR=/var/lib/adatp/plugins
 MAX_FRAME_BYTES=1048576
 IDLE_TIMEOUT_SECS=90
 MAX_CONNECTIONS=8000
+MSG_RATE_LIMIT=200
 
 ADMIN_TOKEN=<from-secret-store>
 ```

@@ -6,6 +6,10 @@ zero-interruption *failover*, because no mechanism exists to share rooms,
 sessions or presence between two processes. This page describes what works
 today and names what does not exist.
 
+> **Status:** fast *recovery* — Operator-builds (patterns below). Zero-downtime
+> *failover* and multi-node rooms — **Roadmap** (a state backplane;
+> [`../../ROADMAP.md`](../../ROADMAP.md)). This page promises neither.
+
 ## Not available in v1 (do not design around these)
 
 - Clustering / multi-node rooms — two servers are two separate worlds.

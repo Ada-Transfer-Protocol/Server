@@ -1,0 +1,51 @@
+# cargo-fuzz workspace for the AdaTP protocol codec.
+#
+# This crate is deliberately its OWN workspace (empty [workspace] table below)
+# so it is not pulled into the parent workspace at ../Cargo.toml, which builds
+# fully offline against the vendored crates. libfuzzer-sys is a nightly-only
+# dev tool and is intentionally NOT vendored; see .cargo/config.toml for how
+# the crates-io source is pointed back at the live registry for fuzz builds.
+#
+#   cargo +nightly fuzz run frame_parser
+#   cargo +nightly fuzz run frame_roundtrip
+
+[package]
+name = "adatp-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bytes = "1"
+
+# The real reference codec under test. Path is relative to this file:
+# server/fuzz/ -> server/core.
+[dependencies.adatp-core]
+path = "../core"
+
+# Standalone workspace: keep this crate out of the parent (offline/vendored)
+# workspace so nightly fuzz tooling and its non-vendored deps do not disturb
+# the release build.
+[workspace]
+
+# Keep some debug info in the fuzz binary for readable crash backtraces.
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "frame_parser"
+path = "fuzz_targets/frame_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frame_roundtrip"
+path = "fuzz_targets/frame_roundtrip.rs"
+test = false
+doc = false
+bench = false

@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -24,6 +25,73 @@ const MAX_AUTH_ATTEMPTS: u8 = 3;
 const MAX_PREAUTH_VIOLATIONS: u8 = 10;
 const OUT_QUEUE_CAPACITY: usize = 256;
 
+/// RAII slot for the concurrent-connection cap (`MAX_CONNECTIONS`). The count
+/// is incremented in [`try_acquire`] and decremented here on drop — including
+/// when the upgrade future is dropped before it ever reaches [`run_ws`], so a
+/// rejected or abandoned upgrade never leaks a slot.
+pub struct ConnGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for ConnGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Reserve a connection slot, or return `None` when the live count already sits
+/// at `max`. Increments first and rolls back on overflow so there is no
+/// check-then-act race between concurrent upgrades.
+pub fn try_acquire(counter: &Arc<AtomicUsize>, max: usize) -> Option<ConnGuard> {
+    let prev = counter.fetch_add(1, Ordering::AcqRel);
+    if prev >= max {
+        counter.fetch_sub(1, Ordering::AcqRel);
+        return None;
+    }
+    Some(ConnGuard { counter: counter.clone() })
+}
+
+/// Per-connection token-bucket limiter for inbound messages (`MSG_RATE_LIMIT`).
+/// `rate_per_sec` is both the steady-state rate and the burst capacity; a rate
+/// of `0` disables limiting.
+struct RateLimiter {
+    tokens: f64,
+    capacity: f64,
+    refill_per_sec: f64,
+    last: Instant,
+    enabled: bool,
+}
+
+impl RateLimiter {
+    fn new(rate_per_sec: u32) -> Self {
+        let cap = rate_per_sec.max(1) as f64;
+        Self {
+            tokens: cap,
+            capacity: cap,
+            refill_per_sec: rate_per_sec as f64,
+            last: Instant::now(),
+            enabled: rate_per_sec > 0,
+        }
+    }
+
+    /// Consume one token for an inbound message. Returns `false` when the
+    /// bucket is empty (the connection is over its rate and should be closed).
+    fn allow(&mut self, now: Instant) -> bool {
+        if !self.enabled {
+            return true;
+        }
+        let elapsed = now.saturating_duration_since(self.last).as_secs_f64();
+        self.last = now;
+        self.tokens = (self.tokens + elapsed * self.refill_per_sec).min(self.capacity);
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Per-connection protocol state.
 struct ConnState {
     /// Client identity for routing — captured from the first packet header
@@ -40,10 +108,12 @@ struct ConnState {
     room: String,
     auth_attempts: u8,
     preauth_violations: u8,
+    /// Inbound message rate limiter (per connection).
+    rate: RateLimiter,
 }
 
 impl ConnState {
-    fn new() -> Self {
+    fn new(msg_rate_limit: u32) -> Self {
         Self {
             session_id: None,
             secure: None,
@@ -53,6 +123,7 @@ impl ConnState {
             room: "global".to_string(),
             auth_attempts: 0,
             preauth_violations: 0,
+            rate: RateLimiter::new(msg_rate_limit),
         }
     }
 
@@ -67,12 +138,14 @@ enum Flow {
     Close(&'static str),
 }
 
-pub async fn run_ws(socket: WebSocket, state: Arc<AppState>, remote: String) {
+/// Drive one WebSocket connection. `_conn_guard` holds the connection-cap slot
+/// for the whole lifetime of the connection and releases it on return.
+pub async fn run_ws(socket: WebSocket, state: Arc<AppState>, remote: String, _conn_guard: ConnGuard) {
     state.metrics.inc_connection();
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (out_tx, mut out_rx) = mpsc::channel::<OutEvent>(OUT_QUEUE_CAPACITY);
 
-    let mut conn = ConnState::new();
+    let mut conn = ConnState::new(state.cfg.msg_rate_limit);
     let mut last_rx = Instant::now();
     let idle_timeout = Duration::from_secs(state.cfg.idle_timeout_secs);
     let mut keepalive = tokio::time::interval(Duration::from_secs(30));
@@ -83,8 +156,15 @@ pub async fn run_ws(socket: WebSocket, state: Arc<AppState>, remote: String) {
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Binary(data))) => {
-                        last_rx = Instant::now();
+                        let now = Instant::now();
+                        last_rx = now;
                         state.metrics.add_rx(data.len() as u64);
+                        // Per-connection message rate limit (Finding 3): a
+                        // connection over its budget is soft-closed.
+                        if !conn.rate.allow(now) {
+                            warn!("Connection {remote} exceeded message rate; closing");
+                            break "rate_limited";
+                        }
                         if data.len() > state.cfg.max_frame_bytes + 128 {
                             break "frame_too_large";
                         }
@@ -452,6 +532,52 @@ async fn handle_packet(
                 }
             };
 
+            // --- Room authorization (Finding 2) --------------------------
+            // Being authenticated is not enough to enter any room. Two real,
+            // independent gates run before the join takes effect; the default
+            // configuration leaves both permissive (public rooms).
+            //
+            // (a) Built-in config policy: optional allowlist and a
+            //     protected-prefix role requirement (see Config::room_join_allowed).
+            let role = conn.authed.as_ref().map(|u| u.role.clone()).unwrap_or_default();
+            if let Err(reason) = state.cfg.room_join_allowed(&room, &role) {
+                warn!(
+                    "Room join denied by policy: user '{}' → '{}' ({reason})",
+                    conn.authed.as_ref().unwrap().username, room
+                );
+                state.plugins.emit_server_event("room.denied", serde_json::json!({
+                    "room": room, "username": conn.authed.as_ref().unwrap().username, "reason": reason,
+                }));
+                let body = format!(r#"{{"error":"{reason}"}}"#);
+                let _ = send_direct(state, conn, ws_tx, MessageType::AuthFailure, body.as_bytes()).await;
+                return Flow::Continue;
+            }
+
+            // (b) Policy plugins may veto the join. `join` is a veto hook: a
+            //     plugin replying allow:false blocks it (mirrors the "auth" and
+            //     "tool_before" veto hooks). With no join plugin registered the
+            //     join proceeds.
+            if state.plugins.has_hook("join") {
+                let event = serde_json::json!({
+                    "room": room, "old_room": conn.room, "sender": sender_ctx(conn),
+                });
+                if !state.plugins.veto_hook("join", &event).await {
+                    warn!(
+                        "Room join vetoed by plugin: user '{}' → '{}'",
+                        conn.authed.as_ref().unwrap().username, room
+                    );
+                    state.plugins.emit_server_event("room.denied", serde_json::json!({
+                        "room": room, "username": conn.authed.as_ref().unwrap().username, "reason": "forbidden",
+                    }));
+                    let _ = send_direct(
+                        state, conn, ws_tx,
+                        MessageType::AuthFailure,
+                        br#"{"error":"forbidden"}"#,
+                    ).await;
+                    return Flow::Continue;
+                }
+            }
+
             let hub_id = conn.hub_id.expect("authed connection has hub id");
             if let Some(old_room) = state.hub.join_room(hub_id, &room) {
                 if old_room != room {
@@ -477,12 +603,6 @@ async fn handle_packet(
                 }
                 conn.room = room.clone();
                 info!("{} joined room '{}'", conn.authed.as_ref().unwrap().username, room);
-                if state.plugins.has_hook("join") {
-                    let event = serde_json::json!({
-                        "room": room, "old_room": old_room, "sender": sender_ctx(conn),
-                    });
-                    state.plugins.notify_hook("join", &event).await;
-                }
                 state.plugins.emit_server_event("room.joined", serde_json::json!({
                     "room": room,
                     "username": conn.authed.as_ref().unwrap().username,
@@ -649,8 +769,15 @@ async fn execute_tool_call(
     }
 }
 
-/// Decrypt an inbound packet with the connection's session; plaintext packets
-/// pass through unchanged.
+/// Decrypt an inbound packet with the connection's session.
+///
+/// Encrypted packets are decrypted (which also enforces replay protection).
+/// Plaintext packets normally pass through — but once a secure session exists
+/// for this connection, accepting plaintext for a sensitive type would be an
+/// encryption **downgrade** (Finding 4), so those are rejected (the caller maps
+/// `Err` to a connection close). Pre-handshake and plaintext-only sessions
+/// (`secure == None`) are unaffected, so anonymous / no-session flows keep
+/// working.
 fn decrypt_in(conn: &mut ConnState, packet: &Packet) -> Result<Vec<u8>, ()> {
     if packet.header.flags.contains(PacketFlags::ENCRYPTED) {
         match conn.secure.as_mut() {
@@ -658,8 +785,27 @@ fn decrypt_in(conn: &mut ConnState, packet: &Packet) -> Result<Vec<u8>, ()> {
             None => Err(()),
         }
     } else {
+        if plaintext_downgrade_rejected(conn.secure.is_some(), packet.header.msg_type) {
+            return Err(());
+        }
         Ok(packet.payload.to_vec())
     }
+}
+
+/// True when a plaintext packet of type `t` must be refused because a secure
+/// session already exists on the connection.
+fn plaintext_downgrade_rejected(session_exists: bool, t: MessageType) -> bool {
+    session_exists && requires_encryption(t)
+}
+
+/// Message types that MUST be encrypted once a secure session exists: auth,
+/// room control, tool calls, and all room-routed text/data traffic — the
+/// sensitive surface reachable through [`decrypt_in`].
+fn requires_encryption(t: MessageType) -> bool {
+    matches!(
+        t,
+        MessageType::AuthRequest | MessageType::JoinRoom | MessageType::ToolCall
+    ) || is_routable(t)
 }
 
 async fn unauthorized(
@@ -677,5 +823,72 @@ async fn unauthorized(
         Flow::Close("preauth_flood")
     } else {
         Flow::Continue
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_limiter_caps_burst_then_refills() {
+        let mut rl = RateLimiter::new(5);
+        let t0 = Instant::now();
+        // A burst up to capacity is allowed at a single instant.
+        for i in 0..5 {
+            assert!(rl.allow(t0), "message {i} within the burst budget should pass");
+        }
+        // One more at the same instant is over the limit.
+        assert!(!rl.allow(t0), "burst + 1 must be rejected");
+        // After a full second, tokens refill and traffic flows again.
+        assert!(rl.allow(t0 + Duration::from_secs(1)), "a token must be available after 1s");
+    }
+
+    #[test]
+    fn rate_limiter_zero_is_unlimited() {
+        let mut rl = RateLimiter::new(0);
+        let t0 = Instant::now();
+        for _ in 0..10_000 {
+            assert!(rl.allow(t0), "a rate of 0 disables limiting");
+        }
+    }
+
+    #[test]
+    fn connection_cap_acquire_and_release() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let g1 = try_acquire(&counter, 2).expect("slot 1");
+        let _g2 = try_acquire(&counter, 2).expect("slot 2");
+        // At the cap, further acquisitions are rejected and reserve nothing.
+        assert!(try_acquire(&counter, 2).is_none(), "over the cap must be rejected");
+        assert_eq!(counter.load(Ordering::Acquire), 2, "a rejected acquire leaks no slot");
+        // Releasing a slot frees capacity again.
+        drop(g1);
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+        assert!(try_acquire(&counter, 2).is_some(), "a freed slot can be reused");
+    }
+
+    #[test]
+    fn requires_encryption_covers_sensitive_types() {
+        assert!(requires_encryption(MessageType::AuthRequest));
+        assert!(requires_encryption(MessageType::JoinRoom));
+        assert!(requires_encryption(MessageType::ToolCall));
+        assert!(requires_encryption(MessageType::TextMessage));
+        assert!(requires_encryption(MessageType::FileChunk));
+        assert!(requires_encryption(MessageType::GameState));
+        // Handshake + keepalive never pass through decrypt_in and may be plaintext.
+        assert!(!requires_encryption(MessageType::HandshakeInit));
+        assert!(!requires_encryption(MessageType::Ping));
+    }
+
+    #[test]
+    fn plaintext_rejected_only_after_session_established() {
+        // No session yet: a plaintext AuthRequest is the normal pre-handshake flow.
+        assert!(!plaintext_downgrade_rejected(false, MessageType::AuthRequest));
+        // Session exists: plaintext for sensitive types is a downgrade → rejected.
+        assert!(plaintext_downgrade_rejected(true, MessageType::AuthRequest));
+        assert!(plaintext_downgrade_rejected(true, MessageType::TextMessage));
+        assert!(plaintext_downgrade_rejected(true, MessageType::JoinRoom));
+        // Even with a session, a type never handled via decrypt_in is not our concern here.
+        assert!(!plaintext_downgrade_rejected(true, MessageType::Ping));
     }
 }

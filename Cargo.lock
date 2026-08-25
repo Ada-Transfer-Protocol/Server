@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "adatp-core"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "aes-gcm",
  "bincode",
@@ -40,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "adatp-server"
-version = "1.0.0"
+version = "1.2.0"
 dependencies = [
  "adatp-core",
  "anyhow",

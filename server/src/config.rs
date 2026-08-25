@@ -32,6 +32,22 @@ pub struct Config {
     pub idle_timeout_secs: u64,
     /// Directory scanned for plugins. `PLUGINS_DIR`, default `plugins`.
     pub plugins_dir: String,
+    /// Hard cap on concurrent WebSocket connections. `MAX_CONNECTIONS`, default 10000.
+    /// New connections above the cap are rejected at upgrade with HTTP 503.
+    pub max_connections: usize,
+    /// Per-connection inbound message rate limit in messages/second.
+    /// `MSG_RATE_LIMIT`, default 200. `0` disables the limit. Connections that
+    /// exceed it are closed (`rate_limited`).
+    pub msg_rate_limit: u32,
+    /// Optional room allowlist. `ROOM_ALLOWLIST` (comma-separated). When
+    /// non-empty, only listed rooms may be joined. Empty = all rooms (default).
+    pub room_allowlist: Vec<String>,
+    /// Rooms whose name starts with this prefix require `room_protected_role`.
+    /// `ROOM_PROTECTED_PREFIX`, default unset (no prefix is protected).
+    pub room_protected_prefix: Option<String>,
+    /// Role required to join `room_protected_prefix` rooms. `ROOM_PROTECTED_ROLE`,
+    /// default `admin`.
+    pub room_protected_role: String,
 }
 
 impl Config {
@@ -90,6 +106,30 @@ impl Config {
             }
         });
 
+        let max_connections: usize = env::var("MAX_CONNECTIONS")
+            .unwrap_or_else(|_| "10000".to_string())
+            .parse()
+            .expect("MAX_CONNECTIONS must be a number");
+
+        let msg_rate_limit: u32 = env::var("MSG_RATE_LIMIT")
+            .unwrap_or_else(|_| "200".to_string())
+            .parse()
+            .expect("MSG_RATE_LIMIT must be a number");
+
+        let room_allowlist: Vec<String> = env::var("ROOM_ALLOWLIST")
+            .unwrap_or_default()
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let room_protected_prefix = env::var("ROOM_PROTECTED_PREFIX")
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        let room_protected_role =
+            env::var("ROOM_PROTECTED_ROLE").unwrap_or_else(|_| "admin".to_string());
+
         Self {
             host,
             port,
@@ -100,10 +140,102 @@ impl Config {
             max_frame_bytes,
             idle_timeout_secs,
             plugins_dir,
+            max_connections,
+            msg_rate_limit,
+            room_allowlist,
+            room_protected_prefix,
+            room_protected_role,
         }
     }
 
     pub fn bind_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
+    }
+
+    /// Built-in room-join policy, enforced before a join takes effect and
+    /// before the plugin `join` veto hook. Returns `Ok(())` when the role may
+    /// join `room`, or `Err(reason)` with a stable machine-readable reason.
+    ///
+    /// Default configuration is permissive (public rooms): an empty allowlist
+    /// and no protected prefix admit every room, so nothing breaks unless an
+    /// operator opts in via `ROOM_ALLOWLIST` / `ROOM_PROTECTED_PREFIX`.
+    pub fn room_join_allowed(&self, room: &str, role: &str) -> Result<(), &'static str> {
+        if !self.room_allowlist.is_empty()
+            && !self.room_allowlist.iter().any(|r| r == room)
+        {
+            return Err("room_not_allowed");
+        }
+        if let Some(prefix) = self.room_protected_prefix.as_deref() {
+            if room.starts_with(prefix) && role != self.room_protected_role {
+                return Err("room_forbidden");
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> Config {
+        Config {
+            host: "0.0.0.0".into(),
+            port: 3000,
+            auth_driver: AuthDriver::None,
+            auth_file_path: "users.json".into(),
+            auth_api_url: None,
+            database_url: "sqlite:adatp.db".into(),
+            max_frame_bytes: 1048576,
+            idle_timeout_secs: 90,
+            plugins_dir: "plugins".into(),
+            max_connections: 10000,
+            msg_rate_limit: 200,
+            room_allowlist: Vec::new(),
+            room_protected_prefix: None,
+            room_protected_role: "admin".into(),
+        }
+    }
+
+    #[test]
+    fn default_policy_is_permissive() {
+        let cfg = base();
+        assert!(cfg.room_join_allowed("global", "user").is_ok());
+        assert!(cfg.room_join_allowed("anything-goes", "anonymous").is_ok());
+    }
+
+    #[test]
+    fn allowlist_blocks_unlisted_rooms() {
+        let mut cfg = base();
+        cfg.room_allowlist = vec!["lobby".into(), "global".into()];
+        assert!(cfg.room_join_allowed("lobby", "user").is_ok());
+        assert!(cfg.room_join_allowed("global", "user").is_ok());
+        assert_eq!(cfg.room_join_allowed("secret", "user"), Err("room_not_allowed"));
+    }
+
+    #[test]
+    fn protected_prefix_requires_role() {
+        let mut cfg = base();
+        cfg.room_protected_prefix = Some("admin-".into());
+        cfg.room_protected_role = "admin".into();
+        // Non-admin cannot join a protected room.
+        assert_eq!(cfg.room_join_allowed("admin-ops", "user"), Err("room_forbidden"));
+        // The right role can.
+        assert!(cfg.room_join_allowed("admin-ops", "admin").is_ok());
+        // Unprotected rooms are unaffected by the prefix rule.
+        assert!(cfg.room_join_allowed("general", "user").is_ok());
+    }
+
+    #[test]
+    fn allowlist_and_prefix_compose() {
+        let mut cfg = base();
+        cfg.room_allowlist = vec!["admin-ops".into(), "general".into()];
+        cfg.room_protected_prefix = Some("admin-".into());
+        // In the allowlist but wrong role → still forbidden by the prefix rule.
+        assert_eq!(cfg.room_join_allowed("admin-ops", "user"), Err("room_forbidden"));
+        // In the allowlist and right role → allowed.
+        assert!(cfg.room_join_allowed("admin-ops", "admin").is_ok());
+        // Not in the allowlist → rejected before the prefix rule is considered.
+        assert_eq!(cfg.room_join_allowed("random", "admin"), Err("room_not_allowed"));
     }
 }

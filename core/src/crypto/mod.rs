@@ -18,4 +18,7 @@ pub enum CryptoError {
 
     #[error("Signature verification failed")]
     SignatureError,
+
+    #[error("Replay detected: sequence already seen or older than the highest accepted")]
+    ReplayDetected,
 }

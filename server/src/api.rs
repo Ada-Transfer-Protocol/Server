@@ -36,6 +36,9 @@ pub struct AppState {
     /// When true, /readyz reports 503 and new WebSocket connections are
     /// rejected (load-balancer drain).
     pub draining: std::sync::atomic::AtomicBool,
+    /// Live count of in-flight WebSocket connections, used to enforce the
+    /// `MAX_CONNECTIONS` cap. Reserved at upgrade, released on close.
+    pub conns_in_flight: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 async fn api_key_middleware(
@@ -140,9 +143,16 @@ async fn ws_handler(
     if state.draining.load(std::sync::atomic::Ordering::Relaxed) {
         return (StatusCode::SERVICE_UNAVAILABLE, "draining").into_response();
     }
+    // Connection cap (Finding 3): reserve a slot or reject the new socket.
+    let guard = match connection::try_acquire(&state.conns_in_flight, state.cfg.max_connections) {
+        Some(g) => g,
+        None => {
+            return (StatusCode::SERVICE_UNAVAILABLE, "max connections reached").into_response()
+        }
+    };
     let max = state.cfg.max_frame_bytes + 4096;
     ws.max_message_size(max)
         .max_frame_size(max)
-        .on_upgrade(move |socket| connection::run_ws(socket, state, addr.to_string()))
+        .on_upgrade(move |socket| connection::run_ws(socket, state, addr.to_string(), guard))
         .into_response()
 }

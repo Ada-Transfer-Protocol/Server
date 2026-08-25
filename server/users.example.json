@@ -1,0 +1,14 @@
+[
+    {
+        "_comment": "EXAMPLE ONLY — copy this file to users.json and replace every value with real credentials. The file driver stores plaintext passwords and is for development/demos only; use AUTH_DRIVER=api in production. users.json is git-ignored and must never be committed.",
+        "username": "change-me-admin",
+        "password": "CHANGE_ME_do_not_use_in_production",
+        "role": "admin"
+    },
+    {
+        "_comment": "Add one object per user. The 'role' field is optional and defaults to 'user'.",
+        "username": "change-me-user",
+        "password": "CHANGE_ME_too",
+        "role": "user"
+    }
+]

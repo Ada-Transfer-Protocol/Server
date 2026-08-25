@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use log::{info, warn};
+use log::info;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -82,7 +82,15 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 impl AuthManager {
-    pub fn new(cfg: &Config) -> Arc<Self> {
+    /// Construct the auth manager for the configured driver.
+    ///
+    /// The `file` driver is **fail-closed at startup**: if no user file can be
+    /// read, or the file defines zero users, the server refuses to start
+    /// (returns `Err`) rather than silently coming up with no valid logins or
+    /// with left-over demo credentials. Operators who genuinely want an open
+    /// server must select `AUTH_DRIVER=none` explicitly. The `api` and `none`
+    /// drivers are unaffected.
+    pub fn new(cfg: &Config) -> Result<Arc<Self>, String> {
         let mgr = Arc::new(Self {
             driver: cfg.auth_driver.clone(),
             users: RwLock::new(HashMap::new()),
@@ -92,19 +100,32 @@ impl AuthManager {
         });
 
         if mgr.driver == AuthDriver::File {
-            let loaded = mgr.load_users_blocking();
-            match loaded {
+            match mgr.load_users_blocking() {
+                Ok(0) => {
+                    return Err(format!(
+                        "AUTH_DRIVER=file but the user file '{}' defines zero users. \
+                         Refusing to start (fail-closed). Copy server/users.example.json \
+                         to '{}' and set real credentials, or choose AUTH_DRIVER=api / \
+                         AUTH_DRIVER=none explicitly.",
+                        mgr.file_path, mgr.file_path
+                    ));
+                }
                 Ok(n) => info!("Auth driver 'file': {} user(s) loaded", n),
-                Err(e) => warn!(
-                    "Auth driver 'file': could not load user file ({e}). \
-                     All logins will be rejected until the file exists."
-                ),
+                Err(e) => {
+                    return Err(format!(
+                        "AUTH_DRIVER=file (default) but no readable user file was found: {e}. \
+                         Refusing to start (fail-closed) so the server never runs with demo \
+                         or absent credentials. Copy server/users.example.json to '{}', or \
+                         set AUTH_DRIVER=api / AUTH_DRIVER=none explicitly.",
+                        mgr.file_path
+                    ));
+                }
             }
         } else {
             info!("Auth driver: {:?}", mgr.driver);
         }
 
-        mgr
+        Ok(mgr)
     }
 
     /// Loads (or reloads) the user file. Tries `AUTH_FILE_PATH` first, then
@@ -222,5 +243,100 @@ impl AuthManager {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AuthDriver;
+
+    fn cfg_for(path: &str, driver: AuthDriver) -> Config {
+        Config {
+            host: "0.0.0.0".into(),
+            port: 3000,
+            auth_driver: driver,
+            auth_file_path: path.into(),
+            auth_api_url: None,
+            database_url: "sqlite:adatp.db".into(),
+            max_frame_bytes: 1048576,
+            idle_timeout_secs: 90,
+            plugins_dir: "plugins".into(),
+            max_connections: 10000,
+            msg_rate_limit: 200,
+            room_allowlist: Vec::new(),
+            room_protected_prefix: None,
+            room_protected_role: "admin".into(),
+        }
+    }
+
+    fn write_temp_users(contents: &str) -> String {
+        let mut path = std::env::temp_dir();
+        let unique = format!(
+            "adatp-users-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        path.push(unique);
+        std::fs::write(&path, contents).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[tokio::test]
+    async fn file_driver_happy_path_auth_then_join() {
+        let path = write_temp_users(r#"[{"username":"alice","password":"s3cret","role":"user"}]"#);
+        let cfg = cfg_for(&path, AuthDriver::File);
+        let auth = AuthManager::new(&cfg).expect("file driver loads a non-empty user file");
+
+        // Correct credentials authenticate and carry the declared role.
+        let user = auth.verify("alice", "s3cret").await.expect("valid login");
+        assert_eq!(user.username, "alice");
+        assert_eq!(user.role, "user");
+
+        // The authenticated user may join a public room (default permissive policy).
+        assert!(cfg.room_join_allowed("global", &user.role).is_ok());
+
+        // Wrong password and unknown user are both rejected.
+        assert!(matches!(
+            auth.verify("alice", "nope").await,
+            Err(AuthError::InvalidCredentials)
+        ));
+        assert!(matches!(
+            auth.verify("mallory", "whatever").await,
+            Err(AuthError::InvalidCredentials)
+        ));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn file_driver_refuses_to_start_without_users() {
+        // Missing file → fail-closed (Finding 5).
+        let cfg = cfg_for("adatp-nonexistent-user-file.json", AuthDriver::File);
+        assert!(
+            AuthManager::new(&cfg).is_err(),
+            "a missing user file must refuse startup, not run open"
+        );
+
+        // A file that defines zero users → also fail-closed.
+        let path = write_temp_users("[]");
+        let cfg = cfg_for(&path, AuthDriver::File);
+        assert!(
+            AuthManager::new(&cfg).is_err(),
+            "zero users must refuse startup"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn none_driver_still_admits_anonymous() {
+        // Finding 5 must not weaken the `none` driver.
+        let cfg = cfg_for("unused.json", AuthDriver::None);
+        let auth = AuthManager::new(&cfg).expect("none driver never touches a file");
+        let user = auth.verify("guest", "").await.expect("anonymous accepted");
+        assert_eq!(user.role, "anonymous");
     }
 }

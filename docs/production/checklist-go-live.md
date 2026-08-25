@@ -3,6 +3,13 @@
 The final gate. Every row needs a checkmark, an owner, and evidence
 (command output or screenshot) attached to your launch ticket.
 
+> **Every gate below maps to a capability that actually ships in v1** — drain,
+> kick, fail-closed auth, signed webhooks, the integration suite, etc. Nothing
+> here depends on an unshipped feature; there is no "roadmap" tier to defer.
+> The two things **you** must bring are on rows 1–2: **TLS** and a locked-down
+> ops surface. Rationale for the TLS requirement:
+> [`../SECURITY_MODEL.md`](../SECURITY_MODEL.md).
+
 | # | Gate | How to verify | Ref |
 | :-- | :-- | :-- | :-- |
 | 1 | TLS end-to-end; origin port closed | `cargo run -p adatp-cli -- -a wss://<host>/ws -u probe -p …` succeeds; `curl -m3 http://<public-ip>:3000/healthz` fails | [tls-cloudflare.md](./tls-cloudflare.md) |

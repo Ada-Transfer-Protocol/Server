@@ -60,7 +60,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let cfg = Arc::new(Config::load());
     let metrics = Arc::new(Metrics::new());
     let hub = Arc::new(Hub::new());
-    let auth = AuthManager::new(&cfg);
+    // Fail-closed: the file driver refuses to start without a valid user file
+    // (see auth::AuthManager::new). Report clearly and exit non-zero.
+    let auth = match AuthManager::new(&cfg) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("FATAL: {e}");
+            std::process::exit(1);
+        }
+    };
 
     // Ensure the SQLite file exists for sqlite: URLs before connecting.
     if let Some(path) = cfg.database_url.strip_prefix("sqlite:") {
@@ -90,6 +98,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         logs,
         admin_token,
         draining: std::sync::atomic::AtomicBool::new(false),
+        conns_in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     });
     plugins.emit_server_event("server.started", serde_json::json!({ "addr": cfg.bind_addr() }));
 
