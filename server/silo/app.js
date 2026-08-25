@@ -35,7 +35,7 @@ async function unlock(token) {
     try {
         await api('/overview');
     } catch {
-        $('loginError').textContent = 'ACCESS DENIED — invalid token';
+        $('loginError').textContent = t('denied');
         return;
     }
     sessionStorage.setItem('adatp_admin_token', token);
@@ -133,7 +133,7 @@ async function renderConnections() {
         <tr><td>${c.id}</td><td>${esc(c.username)}</td><td>${esc(c.role)}</td>
         <td>${esc(c.room)}</td><td>${esc(c.remote)}</td>
         <td>${new Date(c.connected_at_ms).toISOString().slice(11, 19)}</td>
-        <td><button class="mini danger" onclick="kickConn(${c.id})">KICK</button></td></tr>`).join('');
+        <td><button class="mini danger" onclick="kickConn(${c.id})">${t('kick')}</button></td></tr>`).join('');
 }
 window.kickConn = async (id) => { await api(`/connections/${id}`, { method: 'DELETE' }); refresh(); };
 
@@ -172,9 +172,9 @@ async function renderWebhooks() {
         <td>${w.events.map(e => `<span class="tag">${esc(e)}</span>`).join('')}</td>
         <td>${w.delivered}</td><td>${w.failed}</td><td>${w.skipped_breaker}</td>
         <td>
-          <button class="mini" onclick="whTest('${w.id}')">TEST</button>
-          <button class="mini" onclick="whToggle('${w.id}', ${!w.is_active})">${w.is_active ? 'PAUSE' : 'RESUME'}</button>
-          <button class="mini danger" onclick="whDelete('${w.id}')">DEL</button>
+          <button class="mini" onclick="whTest('${w.id}')">${t('test')}</button>
+          <button class="mini" onclick="whToggle('${w.id}', ${!w.is_active})">${w.is_active ? t('pause') : t('resume')}</button>
+          <button class="mini danger" onclick="whDelete('${w.id}')">${t('del')}</button>
         </td></tr>`).join('');
 
     const { audit } = await api('/webhooks/audit');
@@ -226,9 +226,9 @@ async function renderPlugins() {
           </div>
           <div class="form-row" style="margin-top:8px">
             ${p.state === 'running'
-                ? `<button class="mini" onclick="pluginAction('${p.name}','disable')">DISABLE</button>`
-                : `<button class="mini" onclick="pluginAction('${p.name}','enable')">ENABLE</button>`}
-            <button class="mini" onclick="pluginAction('${p.name}','reload')">RELOAD</button>
+                ? `<button class="mini" onclick="pluginAction('${p.name}','disable')">${t('disable')}</button>`
+                : `<button class="mini" onclick="pluginAction('${p.name}','enable')">${t('enable')}</button>`}
+            <button class="mini" onclick="pluginAction('${p.name}','reload')">${t('reload')}</button>
           </div>
         </div>`).join('');
 }
@@ -244,6 +244,9 @@ async function renderSettings() {
 $('drainOn').onclick = async () => { await api('/drain', { method: 'POST', body: JSON.stringify({ enabled: true }) }); refresh(); };
 $('drainOff').onclick = async () => { await api('/drain', { method: 'POST', body: JSON.stringify({ enabled: false }) }); refresh(); };
 $('usersReload').onclick = async () => { const r = await api('/users/reload', { method: 'POST' }); alert(r.ok ? `Reloaded ${r.users} user(s)` : r.error); };
+
+// language switcher
+siloInitLang();
 
 // auto-login if a token is stored
 if (TOKEN) unlock(TOKEN);

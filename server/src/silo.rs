@@ -12,6 +12,7 @@ pub fn silo_router() -> Router<std::sync::Arc<crate::api::AppState>> {
     Router::new()
         .route("/", get(index))
         .route("/app.js", get(app_js))
+        .route("/i18n.js", get(i18n_js))
         .route("/style.css", get(style_css))
 }
 
@@ -23,6 +24,13 @@ async fn app_js() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/javascript; charset=utf-8")],
         include_str!("../silo/app.js"),
+    )
+}
+
+async fn i18n_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/javascript; charset=utf-8")],
+        include_str!("../silo/i18n.js"),
     )
 }
 
