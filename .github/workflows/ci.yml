@@ -92,10 +92,15 @@ jobs:
         # the live registry. (fuzz/.cargo/config.toml documents the same
         # override for local runs invoked from the fuzz directory.)
         run: mv .cargo/config.toml .cargo/config.toml.disabled
+        # Force the gnu target: cargo-fuzz's default here resolves to
+        # x86_64-unknown-linux-musl (static libc), and AddressSanitizer is
+        # incompatible with a statically linked libc. gnu (dynamic libc) is the
+        # standard sanitizer-compatible target; the command line overrides any
+        # inherited default.
       - name: Run frame_parser (30s)
-        run: cargo +nightly fuzz run frame_parser -- -max_total_time=30
+        run: cargo +nightly fuzz run frame_parser --target x86_64-unknown-linux-gnu -- -max_total_time=30
       - name: Run frame_roundtrip (30s)
-        run: cargo +nightly fuzz run frame_roundtrip -- -max_total_time=30
+        run: cargo +nightly fuzz run frame_roundtrip --target x86_64-unknown-linux-gnu -- -max_total_time=30
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@v4
