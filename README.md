@@ -1,10 +1,41 @@
 # Ada Transfer Protocol (Server)
 
-![AdaTP](https://img.shields.io/badge/AdaTP-v1.0.0-blueviolet?style=for-the-badge) ![Rust](https://img.shields.io/badge/Built%20With-Rust-orange?style=for-the-badge) ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
+<p>
+  <img src="https://img.shields.io/badge/AdaTP-v1.1.0-blueviolet?style=for-the-badge" alt="AdaTP v1.1.0">
+  <img src="https://img.shields.io/badge/Built%20with-Rust-orange?style=for-the-badge&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT">
+  <img src="https://img.shields.io/badge/Grade-Enterprise-0b3d91?style=for-the-badge" alt="Enterprise grade">
+  <img src="https://img.shields.io/badge/Status-Production--Ready-brightgreen?style=for-the-badge" alt="Production ready">
+</p>
+<p>
+  <img src="https://img.shields.io/badge/Transport-WebSocket-0a7ea4?style=flat-square" alt="WebSocket">
+  <img src="https://img.shields.io/badge/Frame-45--byte%20binary-6f42c1?style=flat-square" alt="45-byte frame">
+  <img src="https://img.shields.io/badge/Encryption-X25519%20%E2%86%92%20AES--256--GCM-d63384?style=flat-square" alt="AES-256-GCM">
+  <img src="https://img.shields.io/badge/Runtime-Tokio%20async-000000?style=flat-square" alt="Tokio">
+  <img src="https://img.shields.io/badge/Auth-fail--closed-important?style=flat-square" alt="Fail-closed auth">
+  <img src="https://img.shields.io/badge/Webhooks-HMAC%20signed-fd7e14?style=flat-square" alt="Signed webhooks">
+  <img src="https://img.shields.io/badge/Plugins-process--isolated-20c997?style=flat-square" alt="Process-isolated plugins">
+  <img src="https://img.shields.io/badge/Conformance-golden%20vectors-2ea44f?style=flat-square" alt="Conformance vectors">
+  <img src="https://img.shields.io/badge/Platform-Linux%20%C2%B7%20macOS%20%C2%B7%20Windows-lightgrey?style=flat-square" alt="Platforms">
+  <img src="https://img.shields.io/badge/SDKs-6%20languages-informational?style=flat-square" alt="6 SDKs">
+</p>
+
+> **Enterprise-grade realtime infrastructure** — one WebSocket port, hop-by-hop
+> encryption, fail-closed authentication, a process-isolated plugin platform and
+> signed webhook delivery, from a single self-contained Rust binary.
 
 **AdaTP (Ada Transfer Protocol)** is a high-performance realtime communication server built with Rust: chat, voice (raw PCM), file transfer, shared game state, an extensible plugin/tool platform, signed webhooks and a built-in operator panel — all over one WebSocket port.
 
 Unlike heavyweight stacks (SIP/WebRTC), AdaTP uses a **lightweight 45-byte binary frame** over WebSocket, making it ideal for AI agents, IoT devices and low-latency applications. The protocol is fully specified ([docs/SPEC.md](docs/SPEC.md) → [docs/spec/](docs/spec/)) with golden test vectors replayed by three independent implementations.
+
+### Why AdaTP for the enterprise
+
+| Pillar | What ships |
+| :-- | :-- |
+| 🔒 **Security** | Ephemeral **X25519 → HKDF-SHA256 → AES-256-GCM** session encryption (re-encrypted per recipient); credential verification on every connection (**fail-closed**); HMAC-signed webhooks with SSRF guards. |
+| 📈 **Scale** | **Tokio** async, per-connection tasks, lock-free `DashMap` room registry, zero-copy plaintext fan-out. Runs from a Raspberry Pi to 10k+ concurrent users (see [requirements](#-system-requirements)). |
+| 🧩 **Extensibility** | Process-isolated **plugins in any language** exposing callable tools and default-deny policy hooks; a documented **45-byte** wire format with conformance vectors and 6 official SDKs. |
+| 🛠 **Operability** | One-line installer + `systemd` service, management CLI, embedded **Silo** operator panel, structured logging, health/readiness endpoints, and a full [production portal](docs/production/README.md). |
 
 **Platform highlights**
 
