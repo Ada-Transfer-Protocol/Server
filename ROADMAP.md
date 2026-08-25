@@ -115,6 +115,29 @@ E2E. Two ways forward — pick one deliberately:
 The review recommends (B); (A) is the path if "secure protocol" must stand on
 its own without TLS. Either is honest — the current in-between is not.
 
+**Decision: (A), because the embedded-first bet requires it.** A ~20 KB MCU
+often can't run TLS but can run X25519/Ed25519 — under (B) that peer has no
+security without TLS, which removes the one axis this project owns. But (A)
+ships **through verification, not before it** — a hand-rolled AKE announced as
+"MITM-resistant" would be the very docs-ahead-of-code failure this review is
+about. Sequence:
+
+1. **Specify** — done: [`docs/spec/12-authenticated-handshake.md`](docs/spec/12-authenticated-handshake.md)
+   (SIGMA-style Ed25519-signed transcript, key pinning/TOFU, downgrade defense,
+   header-as-AAD), as an **opt-in protocol v2** — v1 untouched.
+2. **Formally model** — done as a reviewable, not-yet-run starting point:
+   [`docs/spec/formal/`](docs/spec/formal/) (ProVerif; v1 should expose the
+   MITM, v2 should hold). The free half of the tier-9 "prove it" step.
+3. **Verify** — run + review the models (+ the downgrade query); an independent
+   audit is the paid tier-9 item.
+4. **Implement** — only then wire `core/src/crypto/ed25519.rs` into a v2
+   handshake behind version negotiation; a C reference SDK measures the MCU
+   cost; new conformance vectors; other SDKs follow.
+5. Update the security claims **last**.
+
+Until step 3 passes, **TLS stays mandatory** and v2 is a design — concrete and
+checkable now, instead of a hand-wave.
+
 ## Tier 11 — the embedded-first bet (the actual goal)
 
 1. **Crypto that runs and is measured on the MCU.** X25519 handshake latency

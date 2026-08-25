@@ -414,6 +414,39 @@ optional convenience on trusted private networks), and the empty-AAD / replay
 gaps become non-issues because TLS covers them. This is the **correct posture
 today** and requires no protocol change — only disciplined deployment.
 
+### The decision — A, sequenced through verification
+
+The review favours B, and B is correct *for a general-purpose server behind
+TLS*. But AdaTP's reason to exist is the **embedded-first** case (see the
+README): a constrained MCU that cannot run a TLS stack but can run
+X25519/Ed25519/AES-GCM on-device. Under B, that peer has **no** security
+without TLS — which guts the one axis the project owns. **Therefore the chosen
+direction is A** (authenticate the handshake), so the same verified,
+authenticated exchange runs on an MCU and in a browser.
+
+A is chosen, **but not shipped blind.** Rolling a hand-rolled AKE across the
+server and six SDKs and then announcing "MITM-resistant" would be exactly the
+docs-ahead-of-code failure this whole review is about. So the sequence is:
+
+1. **Specify** — done: [`spec/12-authenticated-handshake.md`](spec/12-authenticated-handshake.md)
+   (SIGMA-style: Ed25519 signature over the full transcript, key pinning/TOFU,
+   downgrade defense, mandatory encryption, header-as-AAD), as an **opt-in
+   protocol v2**; v1 is untouched.
+2. **Formally model** — done (as a reviewable starting point, not yet run):
+   [`spec/formal/`](spec/formal/) — ProVerif models of v1 (expected to expose
+   the MITM) and v2 (expected to hold). This is the free half of "prove it,
+   don't claim it."
+3. **Verify** — run + review the models (and add the mixed-version downgrade
+   query); ideally an independent audit ([`ROADMAP.md`](../ROADMAP.md) tier 9).
+4. **Implement** — only then wire `ed25519.rs` into a v2 handshake behind
+   version negotiation, one reference SDK (incl. C, to prove the MCU claim),
+   new conformance vectors, remaining SDKs.
+5. **Only then** update the security claims.
+
+Until step 3 passes, **TLS remains mandatory** and v2 is a *design*. Nothing in
+the shipped build changed; what changed is that the path is now concrete and
+checkable instead of a hand-wave.
+
 **Recommendation:** ship Option B now (TLS mandatory — the current guidance),
 and pursue Option A as the roadmap item that lets a ~20 KB-RAM MCU be a
 first-class, mutually-authenticated peer without a full TLS stack. See
