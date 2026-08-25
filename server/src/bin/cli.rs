@@ -104,44 +104,51 @@ async fn handle_auth(cmd: AuthCommands, db_url: &str) -> anyhow::Result<()> {
 
     match cmd {
         AuthCommands::List => {
-            let rows = sqlx::query!("SELECT id, key, description, is_active, created_at FROM api_keys")
+            use sqlx::Row;
+            let rows = sqlx::query("SELECT id, key, description, is_active, created_at FROM api_keys")
                 .fetch_all(&pool)
                 .await?;
-            
+
             println!("{:<36} | {:<32} | {:<20} | {:<6} | {}", "ID", "Key", "Desc", "Active", "Created");
             println!("{}", "-".repeat(120));
-            // Use unwrap_or_default because query! inferrence might see them as nullable
             for row in rows {
-                println!("{:<36} | {:<32} | {:<20} | {:<6} | {}", 
-                    row.id.unwrap_or_default(), 
-                    row.key, 
-                    row.description.unwrap_or_default(), 
-                    row.is_active.unwrap_or(false), 
-                    row.created_at);
+                let id: String = row.try_get("id").unwrap_or_default();
+                let key: String = row.try_get("key").unwrap_or_default();
+                let description: String = row.try_get("description").unwrap_or_default();
+                let is_active: bool = row.try_get("is_active").unwrap_or(false);
+                let created_at: String = row.try_get("created_at").unwrap_or_default();
+                println!("{:<36} | {:<32} | {:<20} | {:<6} | {}", id, key, description, is_active, created_at);
             }
         }
         AuthCommands::Create { description } => {
             let id = uuid::Uuid::new_v4().to_string();
             let key = uuid::Uuid::new_v4().to_string().replace("-", "");
             let now = chrono::Utc::now().to_rfc3339();
-            
-            sqlx::query!("INSERT INTO api_keys (id, key, description, is_active, created_at) VALUES (?, ?, ?, ?, ?)",
-                id, key, description, true, now)
+
+            sqlx::query("INSERT INTO api_keys (id, key, description, is_active, created_at) VALUES (?, ?, ?, ?, ?)")
+                .bind(&id)
+                .bind(&key)
+                .bind(&description)
+                .bind(true)
+                .bind(&now)
                 .execute(&pool)
                 .await?;
-                
+
             println!("Created API Key:");
             println!("ID: {}", id);
             println!("Key: {}", key);
         }
         AuthCommands::Revoke { id } => {
-            sqlx::query!("UPDATE api_keys SET is_active = FALSE WHERE id = ?", id)
+            sqlx::query("UPDATE api_keys SET is_active = FALSE WHERE id = ?")
+                .bind(&id)
                 .execute(&pool)
                 .await?;
             println!("Revoked key {}", id);
         }
         AuthCommands::Toggle { id, status } => {
-             sqlx::query!("UPDATE api_keys SET is_active = ? WHERE id = ?", status, id)
+            sqlx::query("UPDATE api_keys SET is_active = ? WHERE id = ?")
+                .bind(status)
+                .bind(&id)
                 .execute(&pool)
                 .await?;
             println!("Set key {} status to {}", id, status);

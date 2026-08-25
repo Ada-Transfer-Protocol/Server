@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AdaTP Silo Panel</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="login" class="login-wrap">
+  <div class="login-box panel">
+    <div class="brand"><span class="led led-amber"></span> AdaTP <b>SILO</b> CONTROL</div>
+    <p class="dim">Operator access — enter the admin token (env <code>ADMIN_TOKEN</code>, or the one printed in the server log).</p>
+    <input id="tokenInput" type="password" placeholder="admin token" autocomplete="off">
+    <button id="loginBtn">AUTHORIZE</button>
+    <div id="loginError" class="err"></div>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+  <header>
+    <div class="brand"><span id="statusLed" class="led led-green"></span> AdaTP <b>SILO</b> CONTROL</div>
+    <nav id="nav">
+      <button data-view="overview" class="active">OVERVIEW</button>
+      <button data-view="connections">CONNECTIONS</button>
+      <button data-view="rooms">ROOMS</button>
+      <button data-view="logs">LOGS</button>
+      <button data-view="webhooks">WEBHOOKS</button>
+      <button data-view="plugins">PLUGINS</button>
+      <button data-view="settings">SETTINGS</button>
+    </nav>
+    <div class="header-right">
+      <span id="clock" class="dim mono"></span>
+      <button id="logoutBtn" class="ghost">LOCK</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- OVERVIEW -->
+    <section id="view-overview" class="view">
+      <div class="kpi-grid">
+        <div class="panel kpi"><div class="kpi-label">ACTIVE CONNECTIONS</div><div class="kpi-value" id="kpiConns">–</div></div>
+        <div class="panel kpi"><div class="kpi-label">ROOMS</div><div class="kpi-value" id="kpiRooms">–</div></div>
+        <div class="panel kpi"><div class="kpi-label">UPTIME</div><div class="kpi-value" id="kpiUptime">–</div></div>
+        <div class="panel kpi"><div class="kpi-label">RX RATE</div><div class="kpi-value" id="kpiRx">–</div></div>
+        <div class="panel kpi"><div class="kpi-label">TX RATE</div><div class="kpi-value" id="kpiTx">–</div></div>
+        <div class="panel kpi"><div class="kpi-label">DROPPED MSGS</div><div class="kpi-value" id="kpiDropped">–</div></div>
+        <div class="panel kpi"><div class="kpi-label">PLUGINS</div><div class="kpi-value" id="kpiPlugins">–</div></div>
+        <div class="panel kpi"><div class="kpi-label">WEBHOOKS</div><div class="kpi-value" id="kpiWebhooks">–</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">THROUGHPUT — LAST 60s <span class="dim">(bytes/s)</span></div>
+        <svg id="loadChart" viewBox="0 0 600 140" preserveAspectRatio="none"></svg>
+        <div class="legend"><span class="sw sw-rx"></span> RX <span class="sw sw-tx"></span> TX</div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">LOAD BALANCER HINTS</div>
+        <div id="lbHints" class="mono dim">–</div>
+      </div>
+    </section>
+
+    <!-- CONNECTIONS -->
+    <section id="view-connections" class="view" style="display:none">
+      <div class="panel">
+        <div class="panel-title">LIVE CONNECTIONS <span id="connCount" class="dim"></span></div>
+        <table><thead><tr><th>ID</th><th>USER</th><th>ROLE</th><th>ROOM</th><th>REMOTE</th><th>CONNECTED</th><th></th></tr></thead>
+        <tbody id="connTable"></tbody></table>
+      </div>
+    </section>
+
+    <!-- ROOMS -->
+    <section id="view-rooms" class="view" style="display:none">
+      <div class="panel">
+        <div class="panel-title">ROOMS</div>
+        <table><thead><tr><th>NAME</th><th>MEMBERS</th></tr></thead><tbody id="roomTable"></tbody></table>
+      </div>
+    </section>
+
+    <!-- LOGS -->
+    <section id="view-logs" class="view" style="display:none">
+      <div class="panel">
+        <div class="panel-title">LIVE LOG STREAM <span class="led led-green blink"></span></div>
+        <div id="logStream" class="log-stream mono"></div>
+      </div>
+    </section>
+
+    <!-- WEBHOOKS -->
+    <section id="view-webhooks" class="view" style="display:none">
+      <div class="panel">
+        <div class="panel-title">REGISTER ENDPOINT</div>
+        <div class="form-row">
+          <input id="whUrl" placeholder="https://example.com/hooks/adatp">
+          <input id="whEvents" placeholder='events (comma, default *) e.g. auth.*, room.joined'>
+          <input id="whDesc" placeholder="description">
+          <button id="whCreate">CREATE</button>
+        </div>
+        <div id="whCreateOut" class="mono dim"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">ENDPOINTS</div>
+        <table><thead><tr><th></th><th>URL</th><th>EVENTS</th><th>OK</th><th>FAIL</th><th>BRK</th><th>ACTIONS</th></tr></thead>
+        <tbody id="whTable"></tbody></table>
+      </div>
+      <div class="panel">
+        <div class="panel-title">DELIVERY AUDIT</div>
+        <table><thead><tr><th>TIME</th><th>ENDPOINT</th><th>EVENT</th><th>OUTCOME</th><th>HTTP</th><th>TRY</th></tr></thead>
+        <tbody id="whAudit"></tbody></table>
+      </div>
+    </section>
+
+    <!-- PLUGINS -->
+    <section id="view-plugins" class="view" style="display:none">
+      <div id="pluginCards" class="plugin-grid"></div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="view-settings" class="view" style="display:none">
+      <div class="panel">
+        <div class="panel-title">ROOM / NODE OPERATIONS</div>
+        <div class="form-row">
+          <button id="drainOn" class="danger">ENGAGE DRAIN</button>
+          <button id="drainOff">RELEASE DRAIN</button>
+          <button id="usersReload">RELOAD USER FILE</button>
+        </div>
+        <div class="dim">Drain: /readyz turns 503 and new connections are refused; existing sessions stay up.</div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">NON-SECRET CONFIGURATION</div>
+        <pre id="configDump" class="mono"></pre>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

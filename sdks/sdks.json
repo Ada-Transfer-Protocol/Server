@@ -1,32 +1,38 @@
 [
     {
-        "name": "AdaTP SDK for PHP",
-        "description": "PHP client library for AdaTP",
-        "status": "Planned"
+        "name": "AdaTP SDK for JavaScript (Browser)",
+        "repo": "https://github.com/Ada-Transfer-Protocol/SDK-JS",
+        "status": "Stable",
+        "version": "1.0.0"
     },
     {
         "name": "AdaTP SDK for Node.js",
-        "description": "Node.js client library for AdaTP",
-        "status": "In Progress"
+        "repo": "https://github.com/Ada-Transfer-Protocol/SDK-NodeJS",
+        "status": "Stable",
+        "version": "1.0.0"
     },
     {
         "name": "AdaTP SDK for Python",
-        "description": "Python client library for AdaTP",
-        "status": "Planned"
+        "repo": "https://github.com/Ada-Transfer-Protocol/SDK-Python",
+        "status": "Stable",
+        "version": "1.0.0"
     },
     {
-        "name": "AdaTP SDK for C#",
-        "description": ".NET Standard 2.0 client library for AdaTP",
-        "status": "Planned"
-    },
-    {
-        "name": "AdaTP SDK for C++",
-        "description": "Modern C++ (17) client library for AdaTP",
-        "status": "Planned"
+        "name": "AdaTP SDK for PHP",
+        "repo": "https://github.com/Ada-Transfer-Protocol/SDK-PHP",
+        "status": "Stable",
+        "version": "1.0.0"
     },
     {
         "name": "AdaTP SDK for C",
-        "description": "C99 client library for AdaTP",
-        "status": "Planned"
+        "repo": "https://github.com/Ada-Transfer-Protocol/SDK-C",
+        "status": "Stable",
+        "version": "1.0.0"
+    },
+    {
+        "name": "AdaTP SDK for Arduino/ESP32",
+        "repo": "https://github.com/Ada-Transfer-Protocol/SDK-ARDUINO-ESP32",
+        "status": "Stable",
+        "version": "1.0.0"
     }
 ]

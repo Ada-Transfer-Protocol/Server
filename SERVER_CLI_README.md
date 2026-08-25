@@ -64,8 +64,9 @@ cargo build --release
 ```
 
 **Ports:**
-*   `TCP: 8444` - Main AdaTP protocol port.
-*   `HTTP: 3000` - Metrics and API port.
+*   `3000` — single unified port: the AdaTP WebSocket data plane (`/ws`), health probes (`/healthz`, `/readyz`) and the HTTP API (`/api/*`).
+*   Production deployments terminate TLS on `443` at a load balancer / Cloudflare and forward to `3000`.
+*   The pre-1.0 raw-TCP listener on `8444` has been removed — see `docs/legacy.md` in the workspace root.
 
 ---
 
@@ -82,10 +83,10 @@ Use this to manage API keys and view server statistics.
 
 ```bash
 # List API Keys
-cargo run -p adatp-server --bin adatp-cli -- auth list
+cargo run -p adatp-server --bin adatp-admin -- auth list
 
 # Create a new API key
-cargo run -p adatp-server --bin adatp-cli -- auth create --description "New App"
+cargo run -p adatp-server --bin adatp-admin -- auth create --description "New App"
 ```
 
 ### B. Test Tool (Connection & Protocol)
@@ -94,8 +95,11 @@ Use this to test valid handshake and encryption flow.
 
 **From `adatp/` workspace root:**
 ```bash
-# Connect to the local server on port 8444
-cargo run -p adatp-cli -- -a 127.0.0.1:8444
+# Connect to the local server (WebSocket ws://127.0.0.1:3000/ws)
+cargo run -p adatp-cli -- -a 127.0.0.1:3000
+
+# With credentials
+cargo run -p adatp-cli -- -a 127.0.0.1:3000 -u user1 -p password123
 ```
 
 ### Expected Output (Test Tool)

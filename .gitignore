@@ -8,3 +8,11 @@ server.log
 
 adatp.db
 .env
+
+# OS litter
+.DS_Store
+
+# Local artifacts
+*.db
+dist/
+.omc/

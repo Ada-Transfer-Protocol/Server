@@ -51,26 +51,35 @@ pub enum MessageType {
     VoiceData = 0x0044,
     VoiceEnd = 0x0045,
 
-    // Video
-    VideoInit = 0x0050,
-    VideoOffer = 0x0051,
-    VideoAnswer = 0x0052,
-    VideoData = 0x0053,
-    VideoEnd = 0x0054,
-
-    // Rooms
-    JoinRoom = 0x00A0,
-    RoomJoined = 0x00A1,
+    // Game state (first-class room-routed state payload)
+    GameState = 0x0050,
 
     // Presence
     PresenceUpdate = 0x0060,
     TypingIndicator = 0x0061,
 
+    // Plugin tool platform
+    ToolCall = 0x0070,
+    ToolResult = 0x0071,
+    ToolError = 0x0072,
+
     // System
-    Ping = 0x0070,
-    Pong = 0x0071,
+    Ping = 0x0080,
+    Pong = 0x0081,
+
+    // Video (reserved; relocated from 0x0050-0x0054 pre-1.0)
+    VideoInit = 0x0090,
+    VideoOffer = 0x0091,
+    VideoAnswer = 0x0092,
+    VideoData = 0x0093,
+    VideoEnd = 0x0094,
+
+    // Rooms
+    JoinRoom = 0x00A0,
+    RoomJoined = 0x00A1,
+
     Disconnect = 0x00FF,
-    
+
     // Fallback
     Unknown = 0xFFFF,
 }
@@ -100,15 +109,19 @@ impl From<u16> for MessageType {
              0x0043 => MessageType::VoiceIce,
              0x0044 => MessageType::VoiceData,
              0x0045 => MessageType::VoiceEnd,
-             0x0050 => MessageType::VideoInit,
-             0x0051 => MessageType::VideoOffer,
-             0x0052 => MessageType::VideoAnswer,
-             0x0053 => MessageType::VideoData,
-             0x0054 => MessageType::VideoEnd,
+             0x0050 => MessageType::GameState,
              0x0060 => MessageType::PresenceUpdate,
              0x0061 => MessageType::TypingIndicator,
-             0x0070 => MessageType::Ping,
-             0x0071 => MessageType::Pong,
+             0x0070 => MessageType::ToolCall,
+             0x0071 => MessageType::ToolResult,
+             0x0072 => MessageType::ToolError,
+             0x0080 => MessageType::Ping,
+             0x0081 => MessageType::Pong,
+             0x0090 => MessageType::VideoInit,
+             0x0091 => MessageType::VideoOffer,
+             0x0092 => MessageType::VideoAnswer,
+             0x0093 => MessageType::VideoData,
+             0x0094 => MessageType::VideoEnd,
              0x00A0 => MessageType::JoinRoom,
              0x00A1 => MessageType::RoomJoined,
              0x00FF => MessageType::Disconnect,

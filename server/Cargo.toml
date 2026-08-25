@@ -1,6 +1,6 @@
 [package]
 name = "adatp-server"
-version = "2.0.0"
+version = "1.0.0"
 edition = "2021"
 
 [dependencies]
@@ -38,11 +38,14 @@ reqwest = { version = "0.11", features = ["json", "blocking"] } # Blocking for C
 once_cell = "1.18"
 dashmap = "5.5" # Concurrent Map for Metrics
 futures = "0.3.31"
+hmac = "0.12"   # Webhook signatures (HMAC-SHA256)
+sha2 = "0.10"
+url = "2"       # Webhook URL validation (SSRF guards)
 
 [[bin]]
 name = "adatp-server"
 path = "src/main.rs"
 
 [[bin]]
-name = "adatp-cli"
+name = "adatp-admin"
 path = "src/bin/cli.rs"

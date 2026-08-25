@@ -1,0 +1,6 @@
+{
+    "name": "adatp-loadtest",
+    "private": true,
+    "type": "module",
+    "dependencies": { "ws": "^8.21.3" }
+}

@@ -19,10 +19,24 @@ pub struct DbManager {
     pool: SqlitePool,
 }
 
+/// A configured webhook endpoint.
+#[derive(Serialize, sqlx::FromRow, Clone, Debug)]
+pub struct WebhookRow {
+    pub id: String,
+    pub url: String,
+    /// HMAC-SHA256 signing secret. Redacted in admin listings.
+    pub secret: String,
+    /// JSON array of event filters (exact names, `prefix.*`, or `*`).
+    pub events: String,
+    pub is_active: bool,
+    pub description: Option<String>,
+    pub created_at: String,
+}
+
 impl DbManager {
     pub async fn new(database_url: &str) -> Result<Self> {
         let pool = SqlitePool::connect(database_url).await?;
-        
+
         // Init Schema
         sqlx::query(
             r#"
@@ -34,6 +48,22 @@ impl DbManager {
                 created_at TEXT NOT NULL
             );
             "#
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS webhooks (
+                id TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                secret TEXT NOT NULL,
+                events TEXT NOT NULL DEFAULT '["*"]',
+                is_active BOOLEAN DEFAULT TRUE,
+                description TEXT,
+                created_at TEXT NOT NULL
+            );
+            "#,
         )
         .execute(&pool)
         .await?;
@@ -93,6 +123,74 @@ impl DbManager {
             .fetch_all(&self.pool)
             .await?;
         Ok(keys)
+    }
+
+    /// Cheap connectivity probe used by /readyz.
+    pub async fn ping(&self) -> Result<()> {
+        sqlx::query("SELECT 1").execute(&self.pool).await?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------
+    // Webhook endpoints
+    // ------------------------------------------------------------------
+
+    pub async fn webhook_list(&self) -> Result<Vec<WebhookRow>> {
+        let rows = sqlx::query_as::<_, WebhookRow>(
+            "SELECT * FROM webhooks ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn webhook_create(
+        &self,
+        url: &str,
+        secret: &str,
+        events: &[String],
+        description: Option<&str>,
+    ) -> Result<WebhookRow> {
+        let row = WebhookRow {
+            id: Uuid::new_v4().to_string(),
+            url: url.to_string(),
+            secret: secret.to_string(),
+            events: serde_json::to_string(events)?,
+            is_active: true,
+            description: description.map(|s| s.to_string()),
+            created_at: Utc::now().to_rfc3339(),
+        };
+        sqlx::query(
+            "INSERT INTO webhooks (id, url, secret, events, is_active, description, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&row.id)
+        .bind(&row.url)
+        .bind(&row.secret)
+        .bind(&row.events)
+        .bind(row.is_active)
+        .bind(&row.description)
+        .bind(&row.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    pub async fn webhook_set_active(&self, id: &str, active: bool) -> Result<bool> {
+        let res = sqlx::query("UPDATE webhooks SET is_active = ? WHERE id = ?")
+            .bind(active)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    pub async fn webhook_delete(&self, id: &str) -> Result<bool> {
+        let res = sqlx::query("DELETE FROM webhooks WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     pub async fn validate_key(&self, key: &str) -> Result<bool> {

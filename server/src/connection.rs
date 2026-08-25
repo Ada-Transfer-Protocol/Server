@@ -1,0 +1,681 @@
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use axum::extract::ws::{Message, WebSocket};
+use bytes::Bytes;
+use futures::{sink::SinkExt, stream::StreamExt};
+use log::{debug, info, warn};
+use tokio::sync::mpsc;
+use uuid::Uuid;
+
+use adatp_core::crypto::key_derivation::SessionKeys;
+use adatp_core::crypto::x25519::{diffie_hellman, KeyPair};
+use adatp_core::session::secure_session::{Role, SecureSession};
+use adatp_core::{MessageType, Packet, PacketFlags};
+
+use crate::api::AppState;
+use crate::auth::{AuthError, AuthRequestBody, AuthUser};
+use crate::hub::{ConnId, OutEvent, RouteMsg};
+
+/// HKDF salt for session key derivation. All SDKs use 32 zero bytes.
+const KDF_SALT: [u8; 32] = [0u8; 32];
+
+const MAX_AUTH_ATTEMPTS: u8 = 3;
+const MAX_PREAUTH_VIOLATIONS: u8 = 10;
+const OUT_QUEUE_CAPACITY: usize = 256;
+
+/// Per-connection protocol state.
+struct ConnState {
+    /// Client identity for routing — captured from the first packet header
+    /// and pinned for the lifetime of the connection (a client cannot switch
+    /// identity mid-stream).
+    session_id: Option<Uuid>,
+    /// Present once a HandshakeInit with a valid X25519 key was answered.
+    secure: Option<SecureSession>,
+    /// True once HandshakeComplete decrypted successfully; from then on all
+    /// server->client packets are encrypted.
+    secure_established: bool,
+    authed: Option<AuthUser>,
+    hub_id: Option<ConnId>,
+    room: String,
+    auth_attempts: u8,
+    preauth_violations: u8,
+}
+
+impl ConnState {
+    fn new() -> Self {
+        Self {
+            session_id: None,
+            secure: None,
+            secure_established: false,
+            authed: None,
+            hub_id: None,
+            room: "global".to_string(),
+            auth_attempts: 0,
+            preauth_violations: 0,
+        }
+    }
+
+    fn sid(&self) -> Uuid {
+        self.session_id.unwrap_or_else(Uuid::nil)
+    }
+}
+
+/// What the packet handler wants the main loop to do next.
+enum Flow {
+    Continue,
+    Close(&'static str),
+}
+
+pub async fn run_ws(socket: WebSocket, state: Arc<AppState>, remote: String) {
+    state.metrics.inc_connection();
+    let (mut ws_tx, mut ws_rx) = socket.split();
+    let (out_tx, mut out_rx) = mpsc::channel::<OutEvent>(OUT_QUEUE_CAPACITY);
+
+    let mut conn = ConnState::new();
+    let mut last_rx = Instant::now();
+    let idle_timeout = Duration::from_secs(state.cfg.idle_timeout_secs);
+    let mut keepalive = tokio::time::interval(Duration::from_secs(30));
+    keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    let close_reason: &'static str = loop {
+        tokio::select! {
+            msg = ws_rx.next() => {
+                match msg {
+                    Some(Ok(Message::Binary(data))) => {
+                        last_rx = Instant::now();
+                        state.metrics.add_rx(data.len() as u64);
+                        if data.len() > state.cfg.max_frame_bytes + 128 {
+                            break "frame_too_large";
+                        }
+                        match handle_packet(&state, &mut conn, &out_tx, &remote, data, &mut ws_tx).await {
+                            Flow::Continue => {}
+                            Flow::Close(reason) => break reason,
+                        }
+                    }
+                    Some(Ok(Message::Ping(p))) => {
+                        last_rx = Instant::now();
+                        let _ = ws_tx.send(Message::Pong(p)).await;
+                    }
+                    Some(Ok(Message::Pong(_))) => { last_rx = Instant::now(); }
+                    Some(Ok(Message::Text(_))) => {
+                        // AdaTP is binary-only over WebSocket; text frames are ignored.
+                        last_rx = Instant::now();
+                    }
+                    Some(Ok(Message::Close(_))) | None => break "peer_closed",
+                    Some(Err(e)) => {
+                        debug!("WS read error from {remote}: {e}");
+                        break "read_error";
+                    }
+                }
+            }
+
+            out = out_rx.recv() => {
+                match out {
+                    Some(OutEvent::Route(m)) => {
+                        if conn.authed.is_some() {
+                            let bytes = encode_for_peer(&mut conn, m.msg_type, &m.payload, m.sender);
+                            state.metrics.add_tx(bytes.len() as u64);
+                            if ws_tx.send(Message::Binary(bytes)).await.is_err() {
+                                break "write_error";
+                            }
+                        }
+                    }
+                    Some(OutEvent::Shutdown) => {
+                        let sid = conn.sid();
+                        let bye = encode_for_peer(&mut conn, MessageType::Disconnect, b"server_shutdown", sid);
+                        let _ = ws_tx.send(Message::Binary(bye)).await;
+                        break "server_shutdown";
+                    }
+                    None => break "queue_closed",
+                }
+            }
+
+            _ = keepalive.tick() => {
+                if last_rx.elapsed() > idle_timeout {
+                    break "idle_timeout";
+                }
+                // WS protocol-level ping; every SDK/browser answers automatically.
+                if ws_tx.send(Message::Ping(Vec::new())).await.is_err() {
+                    break "write_error";
+                }
+            }
+        }
+    };
+
+    // Controlled close & presence cleanup.
+    if let Some(id) = conn.hub_id {
+        if let Some((room, session_id)) = state.hub.unregister(id) {
+            state.hub.broadcast(
+                &room,
+                RouteMsg {
+                    sender: session_id,
+                    msg_type: MessageType::PresenceUpdate,
+                    payload: Bytes::from_static(b"LEAVE"),
+                },
+            );
+            if state.plugins.has_hook("leave") {
+                let event = serde_json::json!({ "room": room, "sender": sender_ctx(&conn) });
+                state.plugins.notify_hook("leave", &event).await;
+            }
+        }
+    }
+    if let Some(user) = conn.authed.as_ref() {
+        state.plugins.emit_server_event("connection.closed", serde_json::json!({
+            "username": user.username, "remote": remote, "reason": close_reason,
+        }));
+    }
+    let _ = ws_tx.send(Message::Close(None)).await;
+    state.metrics.dec_connection();
+    info!(
+        "Connection {} closed ({}): user={}",
+        remote,
+        close_reason,
+        conn.authed.as_ref().map(|u| u.username.as_str()).unwrap_or("-")
+    );
+}
+
+/// Encode a server->client packet, encrypting when the session is secure.
+fn encode_for_peer(
+    conn: &mut ConnState,
+    msg_type: MessageType,
+    plaintext: &[u8],
+    stamp_session: Uuid,
+) -> Vec<u8> {
+    if conn.secure_established {
+        if let Some(secure) = conn.secure.as_mut() {
+            if let Ok((ciphertext, tag, seq)) = secure.encrypt(plaintext) {
+                let mut pkt = Packet::new(msg_type, Bytes::from(ciphertext), stamp_session);
+                pkt.header.flags |= PacketFlags::ENCRYPTED;
+                pkt.header.length = pkt.payload.len() as u32;
+                pkt.header.sequence = seq;
+                pkt.auth_tag = Some(tag);
+                return pkt.to_bytes().to_vec();
+            }
+            warn!("encrypt failed; dropping to plaintext close");
+        }
+    }
+    Packet::new(msg_type, Bytes::copy_from_slice(plaintext), stamp_session)
+        .to_bytes()
+        .to_vec()
+}
+
+async fn send_direct(
+    state: &Arc<AppState>,
+    conn: &mut ConnState,
+    ws_tx: &mut (impl SinkExt<Message> + Unpin),
+    msg_type: MessageType,
+    payload: &[u8],
+) -> bool {
+    let sid = conn.sid();
+    let bytes = encode_for_peer(conn, msg_type, payload, sid);
+    state.metrics.add_tx(bytes.len() as u64);
+    ws_tx.send(Message::Binary(bytes)).await.is_ok()
+}
+
+fn is_routable(t: MessageType) -> bool {
+    matches!(
+        t,
+        MessageType::TextMessage
+            | MessageType::TextAck
+            | MessageType::TextRead
+            | MessageType::FileInit
+            | MessageType::FileChunk
+            | MessageType::FileAck
+            | MessageType::FileComplete
+            | MessageType::FileCancel
+            | MessageType::VoiceInit
+            | MessageType::VoiceOffer
+            | MessageType::VoiceAnswer
+            | MessageType::VoiceIce
+            | MessageType::VoiceData
+            | MessageType::VoiceEnd
+            | MessageType::GameState
+            | MessageType::VideoInit
+            | MessageType::VideoOffer
+            | MessageType::VideoAnswer
+            | MessageType::VideoData
+            | MessageType::VideoEnd
+            | MessageType::PresenceUpdate
+            | MessageType::TypingIndicator
+    )
+}
+
+fn valid_room_name(name: &str) -> bool {
+    let len = name.len();
+    (1..=128).contains(&len) && !name.chars().any(|c| c.is_control())
+}
+
+async fn handle_packet(
+    state: &Arc<AppState>,
+    conn: &mut ConnState,
+    out_tx: &mpsc::Sender<OutEvent>,
+    remote: &str,
+    data: Vec<u8>,
+    ws_tx: &mut (impl SinkExt<Message> + Unpin),
+) -> Flow {
+    let packet = match Packet::from_bytes(Bytes::from(data)) {
+        Ok(p) => p,
+        Err(e) => {
+            debug!("Malformed packet from {remote}: {e}");
+            return Flow::Close("malformed_packet");
+        }
+    };
+
+    if packet.payload.len() > state.cfg.max_frame_bytes {
+        return Flow::Close("frame_too_large");
+    }
+
+    // Pin the client identity to the first packet's session id.
+    if conn.session_id.is_none() {
+        let sid = packet.header.session_id;
+        conn.session_id = Some(if sid.is_nil() { Uuid::new_v4() } else { sid });
+    }
+
+    match packet.header.msg_type {
+        MessageType::HandshakeInit => {
+            if conn.authed.is_some() || conn.secure.is_some() {
+                return Flow::Close("handshake_replay");
+            }
+            if packet.payload.len() >= 32 {
+                // X25519 key agreement with a real ephemeral server key.
+                let kp = KeyPair::generate();
+                let server_pub = *kp.public.as_bytes();
+                match diffie_hellman(kp.secret, &packet.payload[..32]) {
+                    Ok(shared) => {
+                        let keys = SessionKeys::derive(&shared, &KDF_SALT);
+                        conn.secure = Some(SecureSession::new(Role::Server, keys));
+                        if !send_direct(state, conn, ws_tx, MessageType::HandshakeResponse, &server_pub).await {
+                            return Flow::Close("write_error");
+                        }
+                    }
+                    Err(_) => return Flow::Close("bad_handshake_key"),
+                }
+            } else {
+                // Plaintext-mode hello (e.g. "AdaTP v1.0"): acknowledge without
+                // key material — the session simply stays unencrypted.
+                if !send_direct(state, conn, ws_tx, MessageType::HandshakeResponse, &[]).await {
+                    return Flow::Close("write_error");
+                }
+            }
+            Flow::Continue
+        }
+
+        MessageType::HandshakeComplete => {
+            if let Some(secure) = conn.secure.as_mut() {
+                if packet.header.flags.contains(PacketFlags::ENCRYPTED) {
+                    match secure.decrypt(&packet) {
+                        Ok(_) => {
+                            conn.secure_established = true;
+                            debug!("Secure session established for {remote}");
+                        }
+                        Err(_) => return Flow::Close("handshake_verify_failed"),
+                    }
+                }
+            }
+            Flow::Continue
+        }
+
+        MessageType::AuthRequest => {
+            let plaintext = match decrypt_in(conn, &packet) {
+                Ok(p) => p,
+                Err(_) => return Flow::Close("decrypt_failed"),
+            };
+            let body: AuthRequestBody = match serde_json::from_slice(&plaintext) {
+                Ok(b) => b,
+                Err(_) => {
+                    conn.auth_attempts += 1;
+                    let _ = send_direct(
+                        state, conn, ws_tx,
+                        MessageType::AuthFailure,
+                        br#"{"error":"malformed_auth_request"}"#,
+                    ).await;
+                    return if conn.auth_attempts >= MAX_AUTH_ATTEMPTS {
+                        Flow::Close("auth_failed")
+                    } else {
+                        Flow::Continue
+                    };
+                }
+            };
+
+            match state.auth.verify(&body.username, &body.password).await {
+                Ok(user) => {
+                    // Policy plugins may veto an otherwise-valid login.
+                    if state.plugins.has_hook("auth") {
+                        let event = serde_json::json!({
+                            "username": user.username, "role": user.role, "remote": remote,
+                        });
+                        if !state.plugins.veto_hook("auth", &event).await {
+                            conn.auth_attempts += 1;
+                            warn!("Auth vetoed by plugin for {remote} (user '{}')", user.username);
+                            state.plugins.emit_server_event("auth.failure", serde_json::json!({
+                                "username": user.username, "remote": remote, "reason": "forbidden",
+                            }));
+                            let _ = send_direct(
+                                state, conn, ws_tx,
+                                MessageType::AuthFailure,
+                                br#"{"error":"forbidden"}"#,
+                            ).await;
+                            return if conn.auth_attempts >= MAX_AUTH_ATTEMPTS {
+                                Flow::Close("auth_failed")
+                            } else {
+                                Flow::Continue
+                            };
+                        }
+                    }
+
+                    let ok_payload = serde_json::json!({
+                        "user_id": user.user_id,
+                        "username": user.username,
+                        "role": user.role,
+                    })
+                    .to_string();
+
+                    if conn.authed.is_none() {
+                        let id = state.hub.register(
+                            conn.sid(),
+                            user.username.clone(),
+                            user.role.clone(),
+                            conn.room.clone(),
+                            remote.to_string(),
+                            out_tx.clone(),
+                        );
+                        conn.hub_id = Some(id);
+                    }
+                    conn.authed = Some(user.clone());
+                    info!("Auth success for {remote}: {} (role {})", user.username, user.role);
+                    state.plugins.emit_server_event("auth.success", serde_json::json!({
+                        "username": user.username, "role": user.role, "remote": remote,
+                    }));
+                    if !send_direct(state, conn, ws_tx, MessageType::AuthSuccess, ok_payload.as_bytes()).await {
+                        return Flow::Close("write_error");
+                    }
+                    Flow::Continue
+                }
+                Err(AuthError::InvalidCredentials) => {
+                    conn.auth_attempts += 1;
+                    warn!("Auth failure for {remote} (user '{}')", body.username);
+                    state.plugins.emit_server_event("auth.failure", serde_json::json!({
+                        "username": body.username, "remote": remote, "reason": "invalid_credentials",
+                    }));
+                    let _ = send_direct(
+                        state, conn, ws_tx,
+                        MessageType::AuthFailure,
+                        br#"{"error":"invalid_credentials"}"#,
+                    ).await;
+                    if conn.auth_attempts >= MAX_AUTH_ATTEMPTS {
+                        Flow::Close("auth_failed")
+                    } else {
+                        Flow::Continue
+                    }
+                }
+                Err(AuthError::Unavailable(e)) => {
+                    warn!("Auth backend unavailable: {e}");
+                    let _ = send_direct(
+                        state, conn, ws_tx,
+                        MessageType::AuthFailure,
+                        br#"{"error":"auth_unavailable"}"#,
+                    ).await;
+                    // Fail closed: never admit clients while the backend is down.
+                    Flow::Close("auth_unavailable")
+                }
+            }
+        }
+
+        MessageType::Ping => {
+            let payload = packet.payload.to_vec();
+            if !send_direct(state, conn, ws_tx, MessageType::Pong, &payload).await {
+                return Flow::Close("write_error");
+            }
+            Flow::Continue
+        }
+
+        MessageType::Disconnect => Flow::Close("client_disconnect"),
+
+        MessageType::JoinRoom => {
+            if conn.authed.is_none() {
+                return unauthorized(state, conn, ws_tx).await;
+            }
+            let plaintext = match decrypt_in(conn, &packet) {
+                Ok(p) => p,
+                Err(_) => return Flow::Close("decrypt_failed"),
+            };
+            let room = match std::str::from_utf8(&plaintext) {
+                Ok(r) if valid_room_name(r) => r.to_string(),
+                _ => {
+                    let _ = send_direct(
+                        state, conn, ws_tx,
+                        MessageType::AuthFailure,
+                        br#"{"error":"invalid_room_name"}"#,
+                    ).await;
+                    return Flow::Continue;
+                }
+            };
+
+            let hub_id = conn.hub_id.expect("authed connection has hub id");
+            if let Some(old_room) = state.hub.join_room(hub_id, &room) {
+                if old_room != room {
+                    // Tell the old room we left (we are no longer a member there).
+                    state.hub.broadcast(
+                        &old_room,
+                        RouteMsg {
+                            sender: conn.sid(),
+                            msg_type: MessageType::PresenceUpdate,
+                            payload: Bytes::from_static(b"LEAVE"),
+                        },
+                    );
+                    // Tell the new room we arrived (excluding ourselves).
+                    state.hub.broadcast_except(
+                        &room,
+                        RouteMsg {
+                            sender: conn.sid(),
+                            msg_type: MessageType::PresenceUpdate,
+                            payload: Bytes::from_static(b"JOIN"),
+                        },
+                        hub_id,
+                    );
+                }
+                conn.room = room.clone();
+                info!("{} joined room '{}'", conn.authed.as_ref().unwrap().username, room);
+                if state.plugins.has_hook("join") {
+                    let event = serde_json::json!({
+                        "room": room, "old_room": old_room, "sender": sender_ctx(conn),
+                    });
+                    state.plugins.notify_hook("join", &event).await;
+                }
+                state.plugins.emit_server_event("room.joined", serde_json::json!({
+                    "room": room,
+                    "username": conn.authed.as_ref().unwrap().username,
+                }));
+                if !send_direct(state, conn, ws_tx, MessageType::RoomJoined, room.as_bytes()).await {
+                    return Flow::Close("write_error");
+                }
+            }
+            Flow::Continue
+        }
+
+        MessageType::ToolCall => {
+            if conn.authed.is_none() {
+                return unauthorized(state, conn, ws_tx).await;
+            }
+            let plaintext = match decrypt_in(conn, &packet) {
+                Ok(p) => p,
+                Err(_) => return Flow::Close("decrypt_failed"),
+            };
+            let (reply_type, reply_json) = execute_tool_call(state, conn, &plaintext).await;
+            if !send_direct(state, conn, ws_tx, reply_type, reply_json.as_bytes()).await {
+                return Flow::Close("write_error");
+            }
+            Flow::Continue
+        }
+
+        t if is_routable(t) => {
+            if conn.authed.is_none() {
+                return unauthorized(state, conn, ws_tx).await;
+            }
+            let plaintext = match decrypt_in(conn, &packet) {
+                Ok(p) => p,
+                Err(_) => return Flow::Close("decrypt_failed"),
+            };
+
+            if t == MessageType::TextMessage {
+                // Text fallback for clients without tool packets.
+                if plaintext.starts_with(b"TOOL:") {
+                    let (_, reply_json) = execute_tool_call(state, conn, &plaintext[5..]).await;
+                    let reply = format!("TOOLRESULT:{reply_json}");
+                    if !send_direct(state, conn, ws_tx, MessageType::TextMessage, reply.as_bytes()).await {
+                        return Flow::Close("write_error");
+                    }
+                    return Flow::Continue;
+                }
+                // Moderation-style plugins may veto text messages.
+                if state.plugins.has_hook("text") {
+                    let event = serde_json::json!({
+                        "room": conn.room,
+                        "text": String::from_utf8_lossy(&plaintext),
+                        "sender": sender_ctx(conn),
+                    });
+                    if !state.plugins.veto_hook("text", &event).await {
+                        debug!("Text message blocked by plugin in '{}'", conn.room);
+                        return Flow::Continue;
+                    }
+                }
+            }
+
+            if t == MessageType::FileInit && state.plugins.has_hook("file") {
+                let meta: serde_json::Value =
+                    serde_json::from_slice(&plaintext).unwrap_or(serde_json::Value::Null);
+                let event = serde_json::json!({
+                    "room": conn.room, "meta": meta, "sender": sender_ctx(conn),
+                });
+                if !state.plugins.veto_hook("file", &event).await {
+                    debug!("File transfer blocked by plugin in '{}'", conn.room);
+                    return Flow::Continue;
+                }
+            }
+
+            if t == MessageType::FileComplete {
+                state.plugins.emit_server_event("file.completed", serde_json::json!({
+                    "room": conn.room, "sender": sender_ctx(conn),
+                }));
+            }
+            if t == MessageType::PresenceUpdate && state.plugins.has_hook("presence") {
+                let event = serde_json::json!({
+                    "room": conn.room,
+                    "status": String::from_utf8_lossy(&plaintext),
+                    "sender": sender_ctx(conn),
+                });
+                state.plugins.notify_hook("presence", &event).await;
+            }
+
+            state.hub.broadcast(
+                &conn.room,
+                RouteMsg {
+                    sender: conn.sid(),
+                    msg_type: t,
+                    payload: Bytes::from(plaintext),
+                },
+            );
+            Flow::Continue
+        }
+
+        other => {
+            debug!("Ignoring unsupported packet type {:?} from {remote}", other);
+            Flow::Continue
+        }
+    }
+}
+
+/// Caller identity attached to plugin hook/tool events.
+fn sender_ctx(conn: &ConnState) -> serde_json::Value {
+    serde_json::json!({
+        "username": conn.authed.as_ref().map(|u| u.username.as_str()).unwrap_or("-"),
+        "role": conn.authed.as_ref().map(|u| u.role.as_str()).unwrap_or("-"),
+        "session": conn.sid().simple().to_string(),
+    })
+}
+
+/// Parses and executes a ToolCall body; returns the reply packet type and
+/// its JSON payload (contract: docs/spec/09-extensions.md).
+async fn execute_tool_call(
+    state: &Arc<AppState>,
+    conn: &ConnState,
+    body: &[u8],
+) -> (MessageType, String) {
+    #[derive(serde::Deserialize)]
+    struct CallBody {
+        #[serde(default)]
+        id: String,
+        tool: String,
+        #[serde(default)]
+        args: serde_json::Value,
+    }
+
+    let parsed: Result<CallBody, _> = serde_json::from_slice(body);
+    let call = match parsed {
+        Ok(c) if c.id.len() <= 64 && !c.tool.is_empty() => c,
+        _ => {
+            let reply = serde_json::json!({
+                "id": "", "tool": "", "ok": false,
+                "error": { "code": "tool_invalid_args", "message": "malformed ToolCall JSON" }
+            });
+            return (MessageType::ToolError, reply.to_string());
+        }
+    };
+
+    let user = conn.authed.as_ref().expect("tool calls require auth");
+    let caller = crate::plugins::CallerCtx {
+        username: user.username.clone(),
+        role: user.role.clone(),
+        session: conn.sid().simple().to_string(),
+        room: conn.room.clone(),
+    };
+
+    let args = if call.args.is_null() { serde_json::json!({}) } else { call.args };
+    match state.plugins.call_tool(&caller, &call.tool, args).await {
+        Ok(result) => {
+            let reply = serde_json::json!({
+                "id": call.id, "tool": call.tool, "ok": true, "result": result
+            });
+            (MessageType::ToolResult, reply.to_string())
+        }
+        Err(e) => {
+            let reply = serde_json::json!({
+                "id": call.id, "tool": call.tool, "ok": false,
+                "error": { "code": e.code, "message": e.message }
+            });
+            (MessageType::ToolError, reply.to_string())
+        }
+    }
+}
+
+/// Decrypt an inbound packet with the connection's session; plaintext packets
+/// pass through unchanged.
+fn decrypt_in(conn: &mut ConnState, packet: &Packet) -> Result<Vec<u8>, ()> {
+    if packet.header.flags.contains(PacketFlags::ENCRYPTED) {
+        match conn.secure.as_mut() {
+            Some(secure) => secure.decrypt(packet).map_err(|_| ()),
+            None => Err(()),
+        }
+    } else {
+        Ok(packet.payload.to_vec())
+    }
+}
+
+async fn unauthorized(
+    state: &Arc<AppState>,
+    conn: &mut ConnState,
+    ws_tx: &mut (impl SinkExt<Message> + Unpin),
+) -> Flow {
+    conn.preauth_violations += 1;
+    let _ = send_direct(
+        state, conn, ws_tx,
+        MessageType::AuthFailure,
+        br#"{"error":"not_authenticated"}"#,
+    ).await;
+    if conn.preauth_violations >= MAX_PREAUTH_VIOLATIONS {
+        Flow::Close("preauth_flood")
+    } else {
+        Flow::Continue
+    }
+}

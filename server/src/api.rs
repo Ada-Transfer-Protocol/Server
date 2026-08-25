@@ -1,50 +1,55 @@
 use axum::{
-    routing::get,
-    Router,
-    Json,
-    extract::{State, WebSocketUpgrade, ws::{WebSocket, Message}},
-    http::{StatusCode, HeaderMap},
-    response::{IntoResponse, Response},
+    extract::{ConnectInfo, State, WebSocketUpgrade},
+    http::{HeaderMap, StatusCode},
     middleware::{self, Next},
+    response::{IntoResponse, Response},
+    routing::get,
+    Json, Router,
 };
 use axum::extract::Request;
-use std::sync::Arc;
 use serde_json::json;
-use futures::{sink::SinkExt, stream::StreamExt};
-use tokio::sync::broadcast;
-use bytes::Bytes;
+use std::net::SocketAddr;
+use std::sync::Arc;
 
-use crate::metrics::Metrics;
+use crate::auth::AuthManager;
+use crate::config::Config;
+use crate::connection;
 use crate::db::DbManager;
-use adatp_core::{Packet, MessageType}; 
+use crate::hub::Hub;
+use crate::load::LoadTracker;
+use crate::logging::BufLogger;
+use crate::metrics::Metrics;
+use crate::plugins::PluginManager;
+use crate::webhooks::WebhookManager;
 
 pub struct AppState {
     pub metrics: Arc<Metrics>,
     pub db: Arc<DbManager>,
-    pub tx: broadcast::Sender<(String, Vec<u8>)>,
+    pub hub: Arc<Hub>,
+    pub auth: Arc<AuthManager>,
+    pub cfg: Arc<Config>,
+    pub plugins: Arc<PluginManager>,
+    pub webhooks: Arc<WebhookManager>,
+    pub load: Arc<LoadTracker>,
+    pub logs: &'static BufLogger,
+    pub admin_token: String,
+    /// When true, /readyz reports 503 and new WebSocket connections are
+    /// rejected (load-balancer drain).
+    pub draining: std::sync::atomic::AtomicBool,
 }
 
-async fn auth_middleware(
+async fn api_key_middleware(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     request: Request,
     next: Next,
 ) -> Response {
-    if request.uri().path() == "/ws" {
-        return next.run(request).await;
-    }
-
-    let api_key = headers
-        .get("x-api-key")
-        .and_then(|val| val.to_str().ok());
-
+    let api_key = headers.get("x-api-key").and_then(|v| v.to_str().ok());
     match api_key {
-        Some(key) => {
-            match state.db.validate_key(key).await {
-                Ok(true) => next.run(request).await,
-                _ => (StatusCode::UNAUTHORIZED, "Invalid or Inactive API Key").into_response(),
-            }
-        }
+        Some(key) => match state.db.validate_key(key).await {
+            Ok(true) => next.run(request).await,
+            _ => (StatusCode::UNAUTHORIZED, "Invalid or inactive API key").into_response(),
+        },
         None => (StatusCode::UNAUTHORIZED, "Missing x-api-key header").into_response(),
     }
 }
@@ -53,124 +58,91 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let api_routes = Router::new()
         .route("/status", get(status_handler))
         .route("/metrics", get(metrics_handler))
-        .route_layer(middleware::from_fn_with_state(state.clone(), auth_middleware));
-        
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            api_key_middleware,
+        ));
+
     Router::new()
         .route("/", get(root_handler))
         .route("/ws", get(ws_handler))
+        .route("/healthz", get(healthz_handler))
+        .route("/readyz", get(readyz_handler))
         .nest("/api", api_routes)
+        .nest("/admin/v1", crate::admin::admin_router(state.clone()))
+        .nest("/silo", crate::silo::silo_router())
+        // axum's nest maps the inner "/" to exactly "/silo"; cover the
+        // trailing-slash form people naturally type.
+        .route(
+            "/silo/",
+            get(|| async { axum::response::Redirect::permanent("/silo") }),
+        )
         .with_state(state)
 }
 
 async fn root_handler() -> &'static str {
-    "AdaTP Server is running! 🚀\nWS Endpoint: /ws"
+    "AdaTP server is running.\nWebSocket endpoint: /ws\nHealth: /healthz  Readiness: /readyz"
 }
 
-async fn status_handler() -> Json<serde_json::Value> {
-    Json(json!({ "status": "ok", "service": "adatp-server" }))
+async fn healthz_handler() -> Json<serde_json::Value> {
+    Json(json!({ "status": "ok" }))
+}
+
+async fn readyz_handler(State(state): State<Arc<AppState>>) -> Response {
+    if state.draining.load(std::sync::atomic::Ordering::Relaxed) {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "status": "draining" })),
+        )
+            .into_response();
+    }
+    match state.db.ping().await {
+        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ready" }))).into_response(),
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "status": "not_ready", "error": e.to_string() })),
+        )
+            .into_response(),
+    }
+}
+
+async fn status_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    Json(json!({
+        "status": "ok",
+        "service": "adatp-server",
+        "auth_driver": state.auth.driver_name(),
+        "connections": state.hub.connection_count(),
+    }))
 }
 
 async fn metrics_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let snapshot = state.metrics.snapshot();
-    Json(json!(snapshot))
+    let rooms = state.hub.list_rooms();
+    Json(json!({
+        "uptime_seconds": snapshot.uptime_seconds,
+        "active_connections": snapshot.active_connections,
+        "total_bytes_received": snapshot.total_bytes_received,
+        "total_bytes_sent": snapshot.total_bytes_sent,
+        "avg_rx_speed_bps": snapshot.avg_rx_speed_bps,
+        "rooms": rooms,
+        "dropped_messages": state
+            .hub
+            .dropped_msgs
+            .load(std::sync::atomic::Ordering::Relaxed),
+    }))
 }
-
-// --- WebSocket Logic ---
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_socket(socket, state))
-}
-
-async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
-    let (mut sender, mut receiver) = socket.split();
-    state.metrics.inc_connection();
-
-    // State Tracking
-    let mut room = "global".to_string();
-    let mut connected_session_id = None; // Store the UUID of the client
-
-    let (ws_tx, mut ws_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(100);
-    
-    // 1. Write Loop
-    let write_task = tokio::spawn(async move {
-        while let Some(data) = ws_rx.recv().await {
-            if sender.send(Message::Binary(data)).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    // 2. Main Logic Loop
-    let mut broadcast_rx = state.tx.subscribe();
-    
-    loop {
-        tokio::select! {
-            // A. Incoming from WebSocket (Client)
-            msg = receiver.next() => {
-                match msg {
-                    Some(Ok(Message::Binary(data))) => {
-                        state.metrics.add_rx(data.len() as u64);
-                        if let Ok(packet) = Packet::from_bytes(Bytes::from(data.clone())) {
-                            
-                            // Capture ID from first valid packet
-                            if connected_session_id.is_none() {
-                                connected_session_id = Some(packet.header.session_id);
-                            }
-
-                            match packet.header.msg_type {
-                                MessageType::JoinRoom => {
-                                    // Parse Room Name from Payload
-                                    if let Ok(new_room) = std::str::from_utf8(&packet.payload) {
-                                        room = new_room.to_string();
-                                        println!("Client joined room: {}", room);
-                                    } else {
-                                        // Demo Fallback if payload empty/invalid
-                                        // room = "conf".to_string(); 
-                                        println!("JoinRoom failed: invalid payload");
-                                    }
-                                },
-                                MessageType::AuthRequest => {
-                                    // Respond with Success
-                                    let resp = Packet::new(MessageType::AuthSuccess, Bytes::from("Access Granted"), packet.header.session_id);
-                                    let _ = ws_tx.send(resp.to_bytes().to_vec()).await;
-                                },
-                                MessageType::TextMessage | MessageType::FileInit | MessageType::FileChunk | MessageType::FileComplete | MessageType::VoiceData | MessageType::VideoData => {
-                                     // Broadcast to Room
-                                     let _ = state.tx.send((room.clone(), data));
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) | None => break, // Disconnect
-                    _ => {}
-                }
-            }
-
-            // B. Incoming from Broadcast
-            Ok((msg_room, msg_bytes)) = broadcast_rx.recv() => {
-                if msg_room == room {
-                    // Don't echo back to sender? (Echo cancellation logic is better handled on client for now as we don't parse sender ID here efficiently every time)
-                    state.metrics.add_tx(msg_bytes.len() as u64);
-                    if ws_tx.send(msg_bytes).await.is_err() {
-                        break;
-                    }
-                }
-            }
-        }
+) -> Response {
+    if state.draining.load(std::sync::atomic::Ordering::Relaxed) {
+        return (StatusCode::SERVICE_UNAVAILABLE, "draining").into_response();
     }
-
-    // --- DISCONNECT HANDLER (REALTIME EXIT) ---
-    if let Some(session_id) = connected_session_id {
-        // Create a 'PresenceUpdate' packet with payload "LEAVE"
-        // And send it to the room so others know this ID is gone.
-        let leave_packet = Packet::new(MessageType::PresenceUpdate, Bytes::from("LEAVE"), session_id);
-        let _ = state.tx.send((room, leave_packet.to_bytes().to_vec()));
-    }
-
-    write_task.abort();
-    state.metrics.dec_connection();
+    let max = state.cfg.max_frame_bytes + 4096;
+    ws.max_message_size(max)
+        .max_frame_size(max)
+        .on_upgrade(move |socket| connection::run_ws(socket, state, addr.to_string()))
+        .into_response()
 }
