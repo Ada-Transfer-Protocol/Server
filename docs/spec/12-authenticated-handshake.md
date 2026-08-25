@@ -1,19 +1,23 @@
 # 12 — Authenticated Handshake (Protocol v2)
 
-> **Status: DESIGN + server reference implementation — symbolically verified,
-> no SDK client yet.** This chapter specifies an *authenticated* key exchange
-> for AdaTP protocol **version 2**. Its security has been checked with ProVerif
-> against an active attacker — secrecy and no-MITM hold for v2, and the model
-> reconstructs the MITM for the unauthenticated v1 (results:
-> [`formal/RESULTS.md`](./formal/RESULTS.md)). The **server** now implements it
-> behind version negotiation (`core/src/session/handshake_v2.rs` +
-> `server/src/connection.rs`; golden vectors in
-> [`../../tests/conformance/vectors/adatp-v2-handshake-vectors.json`](../../tests/conformance/vectors/adatp-v2-handshake-vectors.json)),
-> with the v1 path **unchanged**. What is *not* done: **no shipped SDK client
-> negotiates v2**, so the wire path is exercised by tests + a server boot, not
-> yet end-to-end; and there is no independent audit. Do **not** describe the
-> deployment as MITM-resistant yet — that is earned once a client speaks v2 and
-> pins the key. **TLS remains mandatory** meanwhile. See
+> **Status: IMPLEMENTED (server + Node SDK), verified end-to-end and in the
+> symbolic model — audit pending, SDK fleet incomplete.** This chapter specifies
+> an *authenticated* key exchange for AdaTP protocol **version 2**. ProVerif
+> confirms, against an active attacker: secrecy + no-MITM for v2, the MITM for
+> unauthenticated v1, and **no silent version downgrade**
+> ([`formal/RESULTS.md`](./formal/RESULTS.md)). The **server**
+> (`core/src/session/handshake_v2.rs` + `server/src/connection.rs`) negotiates it
+> on `version>=2` (v1 path **unchanged**), binds the header as AEAD **AAD** (§3),
+> and can **require** v2 via `ADATP_MIN_PROTOCOL_VERSION=2`. The **Node SDK**
+> implements the v2 client (pin + signature verify + Finished + AAD); a live
+> Node↔Rust test passes the handshake, an AAD-bound round-trip, wrong-pin
+> rejection, and the downgrade floor. Golden vectors
+> ([`../../tests/conformance/vectors/adatp-v2-handshake-vectors.json`](../../tests/conformance/vectors/adatp-v2-handshake-vectors.json))
+> are machine-checked in both languages. What is *not* done: **the other SDKs
+> (C, Python, PHP, browser-JS, Arduino) do not speak v2 yet**, and there is **no
+> independent audit**. A deployment is MITM-resistant without TLS only when its
+> client speaks v2, pins the key, and sets the floor to 2; until the fleet does,
+> **TLS remains the blanket recommendation**. See
 > [`../SECURITY_MODEL.md`](../SECURITY_MODEL.md) §11.
 
 ## 1. Why
@@ -137,8 +141,13 @@ active attacker (full output: [`formal/RESULTS.md`](./formal/RESULTS.md)):
 3. **v1 MITM reproduced** ✓ — the control model (`adatp_v1_handshake.pv`) has
    both queries **false**, so ProVerif reconstructs the attack the signature
    closes. The model has teeth.
-4. **Downgrade resistance** — argued in prose (§5); **not yet** encoded as a
-   mixed-version ProVerif query. A noted next addition.
+4. **Downgrade resistance** ✓ — now encoded as a dedicated mixed-version model
+   ([`formal/adatp_v2_downgrade.pv`](./formal/adatp_v2_downgrade.pv)): with a v1
+   (unsigned) and a v2 (signing) server sharing one identity on the attacker's
+   network, the pinning client completes **only** via v2
+   (`inj-event(ClientDone) ==> inj-event(ServerV2Ran)` is **true**). The
+   server-side `ADATP_MIN_PROTOCOL_VERSION=2` floor enforces the same policy
+   operationally.
 
 This is the *symbolic* proof — perfect primitives, perfect pinning. It does not
 replace an independent review or an audit ([`../../ROADMAP.md`](../../ROADMAP.md)

@@ -1,0 +1,101 @@
+(*
+  AdaTP v2 — mixed-version DOWNGRADE resistance.
+
+  Question the reviewer asked us to encode: can an active attacker force a
+  v2-capable client (one that PINS spk_S and requires a signature) to complete a
+  session via the unauthenticated v1 path — i.e. silently downgrade it?
+
+  We model, on the same network and sharing the SAME server identity ssk:
+    - ServerV2: the authenticated handshake (signs the transcript);
+    - ServerV1: the legacy/unauthenticated handshake (NO signature) — the thing
+      an attacker would try to downgrade the client onto;
+    - Client:   pins spk_S and will only complete after checksign() succeeds
+      over the v2 transcript (which binds the version via LABEL_HS + the keys).
+
+  The Dolev-Yao attacker owns the channel and may relay/splice freely between the
+  two servers. If downgrade were possible, the client could complete opposite the
+  v1 server (or the attacker), so injective agreement onto ServerV2 would FAIL.
+
+  STATUS: RUN — PASSES. Both queries are true: session-key secrecy holds, and
+  every client completion corresponds to a genuine v2 server run (never v1),
+  i.e. the pin + mandatory-signature closes the downgrade. See RESULTS.md.
+  Symbolic model (perfect primitives/pinning); does not replace an audit.
+*)
+
+free c: channel.
+
+(* ---- X25519 (abstract DH) ---- *)
+type G. type exp.
+const g: G.
+fun dhexp(G, exp): G.
+equation forall x: exp, y: exp; dhexp(dhexp(g,x),y) = dhexp(dhexp(g,y),x).
+
+(* ---- Ed25519 (message-recovering verify) ---- *)
+type sskey. type spkey.
+fun spk(sskey): spkey.
+fun sign(bitstring, sskey): bitstring.
+reduc forall m: bitstring, k: sskey; checksign(sign(m,k), spk(k)) = m.
+
+(* ---- KDF + AEAD ---- *)
+type key.
+fun hkdf(G): key.
+fun senc(bitstring, key): bitstring.
+reduc forall m: bitstring, k: key; sdec(senc(m,k), k) = m.
+
+fun h(bitstring): bitstring.
+const LABEL_HS: bitstring.
+
+(* ---- queries ---- *)
+free secretMsg: bitstring [private].
+query attacker(secretMsg).                 (* secrecy must hold despite the v1 path *)
+
+event ServerV2Ran(G, G).                   (* an authenticated (v2) server run *)
+event ServerV1Ran(G, G).                   (* a legacy (v1, unsigned) server run *)
+event ClientDone(G, G).                    (* the pinning client committed *)
+(* No downgrade: every client commit matches a v2 run — never the v1 server. *)
+query eC: G, eS: G; inj-event(ClientDone(eC, eS)) ==> inj-event(ServerV2Ran(eC, eS)).
+
+(* ---- v2 server: signs the transcript ---- *)
+let ServerV2(ssk: sskey) =
+    in(c, (=LABEL_HS, epkC: G));
+    new y: exp;
+    let epkS = dhexp(g, y) in
+    let th = h((LABEL_HS, epkC, epkS, spk(ssk))) in
+    let sig = sign(th, ssk) in
+    event ServerV2Ran(epkC, epkS);
+    out(c, (epkS, spk(ssk), sig));
+    let k = hkdf(dhexp(epkC, y)) in
+    in(c, fin: bitstring);
+    let (=LABEL_HS, =th) = sdec(fin, k) in
+    0.
+
+(* ---- v1 server: SAME identity, but sends NO signature (the downgrade target) ---- *)
+let ServerV1(ssk: sskey) =
+    in(c, (=LABEL_HS, epkC: G));
+    new y: exp;
+    let epkS = dhexp(g, y) in
+    event ServerV1Ran(epkC, epkS);
+    out(c, epkS);                          (* unauthenticated: no spk, no sig *)
+    let k = hkdf(dhexp(epkC, y)) in
+    in(c, fin: bitstring);
+    0.
+
+(* ---- pinning client: requires a valid v2 signature under the pinned key ---- *)
+let Client(spkS: spkey) =
+    new x: exp;
+    let epkC = dhexp(g, x) in
+    out(c, (LABEL_HS, epkC));
+    in(c, (epkS: G, spkS2: spkey, sig: bitstring));
+    if spkS2 = spkS then                    (* identity pin *)
+    let th = h((LABEL_HS, epkC, epkS, spkS)) in
+    let (=th) = checksign(sig, spkS) in     (* mandatory signature — no downgrade *)
+    let k = hkdf(dhexp(epkS, x)) in
+    event ClientDone(epkC, epkS);
+    out(c, senc((LABEL_HS, th), k));
+    out(c, senc(secretMsg, k)).
+
+(* ---- one honest identity; both server versions and the client run unboundedly ---- *)
+process
+    new ssk: sskey;
+    out(c, spk(ssk));                       (* spk_S is public/pinned *)
+    ( !ServerV2(ssk) | !ServerV1(ssk) | !Client(spk(ssk)) )

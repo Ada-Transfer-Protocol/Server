@@ -30,11 +30,11 @@ Companion documents:
   server authentication and MITM protection today. AdaTP's session encryption
   is best understood as **defense-in-depth on top of TLS**, or as best-effort
   confidentiality on a **trusted** private network.
-- The AEAD's **additional authenticated data (AAD) is currently empty** — the
-  packet header is not bound into the GCM tag. That is a known gap, harmless
-  behind TLS and relevant only on an untrusted transport. **Anti-replay is now
-  enforced:** a sequence at or below the highest already-accepted is rejected and
-  the packet dropped. See [§5](#5-packet-integrity-aad-and-anti-replay).
+- The AEAD's **AAD is empty on v1** — the packet header is not bound into the GCM
+  tag (harmless behind TLS, relevant only on an untrusted v1 transport).
+  **Protocol v2 binds the full header as AAD**, closing this. **Anti-replay is
+  enforced on both:** a sequence at or below the highest already-accepted is
+  rejected and the packet dropped. See [§5](#5-packet-integrity-aad-and-anti-replay).
 
 If you take away one sentence: **run AdaTP behind TLS, use `AUTH_DRIVER=api`,
 and treat the app-layer crypto as a bonus, not the perimeter.**
@@ -196,22 +196,28 @@ server encrypts **all** packets to that client.
 ## 5. Packet integrity: AAD and anti-replay
 
 Historically these were the two places where the docs described the intent and
-the code did something weaker. One of them — **anti-replay** — is now enforced
-(§5.2). The other — the **empty AAD** — remains an open gap. Stated plainly:
+the code did something weaker. Both are now addressed: **anti-replay** is
+enforced (§5.2), and the **empty-AAD** gap is closed in **protocol v2** (§5.1).
 
-### 5.1 The AEAD's AAD is empty
-`SecureSession::encrypt`/`decrypt` pass an **empty AAD** to AES-GCM
-(`core/src/session/secure_session.rs` calls `cipher.encrypt(&iv, plaintext,
-&[])`). Consequences:
-- Only the **payload** is authenticated. The 45-byte header (message type,
-  session id, flags, timestamp, length) is **not** bound into the GCM tag.
+### 5.1 AAD: empty in v1, the header is bound in v2
+`SecureSession::encrypt`/`decrypt` pass an **empty AAD** to AES-GCM for a **v1**
+session (`core/src/session/secure_session.rs`), so on v1 only the payload is
+authenticated:
+- The 45-byte header (message type, session id, flags, timestamp, length) is
+  **not** bound into the GCM tag.
 - The `sequence` field is *implicitly* bound, because it derives the nonce — a
   forged sequence yields the wrong nonce and fails decryption. (It is now also
   *explicitly* range-checked for replay; see §5.2.)
-- But an active attacker on an **untrusted** transport could flip other header
-  bits (e.g. `msg_type`, `session_id`) on an encrypted packet without the tag
-  catching it.
-- **Fix (roadmap):** bind the header (or its security-relevant subset) as AAD.
+- So an active attacker on an **untrusted** transport could flip other header
+  bits (e.g. `msg_type`, `session_id`) on an encrypted v1 packet without the tag
+  catching it. This is a reason v1 requires TLS.
+
+**v2 closes this:** a `SecureSession::new_v2` session binds the full 45-byte
+header (`PacketHeader::header_bytes()`) as the AEAD AAD, so `msg_type`,
+`session_id`, `flags`, `sequence` etc. are tamper-evident — any header change
+fails the tag. Verified by the `v2_binds_header_as_aad_v1_does_not` test and
+end-to-end against the Node SDK. v1 keeps empty AAD so its golden vectors are
+unchanged.
 
 ### 5.2 Anti-replay is enforced
 The normative spec calls replay handling "best-effort." The v1 build now
@@ -238,11 +244,12 @@ limited by the empty AAD (§5.1), and it does not by itself defeat an **active
 MITM**, who can run a fresh handshake — that still requires TLS
 ([§4](#4-what-this-does-and-does-not-protect)).
 
-**Operator takeaway:** the empty AAD (§5.1) is the remaining integrity gap here
-and a reason TLS is mandatory; it is not exploitable behind TLS. Anti-replay
-(§5.2) is now a shipped control, not a roadmap item. Neither the AAD gap nor
-replay lets a passive observer inject or replay on the recommended (TLS)
-deployment.
+**Operator takeaway:** on **v1** the empty AAD (§5.1) is an integrity gap and a
+reason TLS is mandatory; it is not exploitable behind TLS. **v2 binds the header
+as AAD** and (with a pinned key + `ADATP_MIN_PROTOCOL_VERSION=2`) removes that
+gap without TLS. Anti-replay (§5.2) is a shipped control on both. Neither the v1
+AAD gap nor replay lets a passive observer inject or replay on the recommended
+(TLS) deployment.
 
 ---
 
@@ -368,9 +375,9 @@ These are shipped, tested, and safe to be confident about.
 | # | Threat | On a **trusted** network (no TLS) | Behind **TLS** (recommended) |
 | :-- | :-- | :-- | :-- |
 | Passive eavesdropper | Mitigated by AdaTP session crypto (if enabled) | Mitigated by TLS (+ AdaTP as defense-in-depth) |
-| Active MITM | **Not mitigated** — handshake is unauthenticated | Mitigated by TLS certificate verification |
+| Active MITM | v1: **not mitigated** (unauthenticated). **v2: mitigated** — authenticated handshake + pinned key, require via `ADATP_MIN_PROTOCOL_VERSION=2` | Mitigated by TLS certificate verification |
 | Malicious server | **Not mitigated** — no E2E | **Not mitigated** — no E2E (accept this, or add E2E above AdaTP) |
-| Header tamper (empty AAD) | **Not mitigated** — header not bound into the tag | Mitigated by TLS integrity |
+| Header tamper | v1: **not mitigated** (empty AAD). **v2: mitigated** — header bound as AEAD AAD | Mitigated by TLS integrity |
 | Replay of captured packets | Mitigated — sequence ≤ high-water rejected (§5.2) | Mitigated (AdaTP replay check + TLS ordering) |
 | Plaintext downgrade of a live session | Mitigated — plaintext refused for sensitive types once a session exists | Mitigated (same) |
 | Unauthorized resource use | Mitigated — auth gate, attempt caps, rate/connection limits | Mitigated |
@@ -379,8 +386,13 @@ These are shipped, tested, and safe to be confident about.
 | Data-plane message flood | Mitigated in-process — `MSG_RATE_LIMIT`, `MAX_CONNECTIONS` | Mitigated (same) + edge/CDN |
 | Volumetric L3/L4 flood | **Not mitigated** in-process | Mitigate at the edge/CDN |
 
-The single most important row is **Active MITM**: it is the reason TLS is not
-optional.
+The single most important row is **Active MITM**. On **v1** it is the reason TLS
+is not optional. **v2** now provides an in-protocol answer (a ProVerif-verified
+authenticated handshake + header-AAD + a downgrade floor), so a v2 deployment
+with a pinned key and `ADATP_MIN_PROTOCOL_VERSION=2` is MITM-resistant without
+TLS — but that posture is earned per deployment (the client must speak v2), and
+until every SDK does, TLS remains the blanket recommendation. Malicious-server
+(no E2E) is unchanged by v2.
 
 ---
 
@@ -436,10 +448,12 @@ docs-ahead-of-code failure this whole review is about. So the sequence is:
    results in [`spec/formal/RESULTS.md`](spec/formal/RESULTS.md)): ProVerif
    confirms secrecy **and** injective agreement (no MITM) for v2, and
    reconstructs the MITM for v1 — the symbolic "prove it, don't claim it" half.
-3. **Verify (remaining)** — an expert review, a mixed-version downgrade query,
-   and — for a product making a crypto claim — an independent audit
-   ([`ROADMAP.md`](../ROADMAP.md) tier 9). The symbolic model assumes perfect
-   primitives and perfect pinning; it is necessary, not sufficient.
+3. **Verify** — the mixed-version **downgrade query is now modeled and passes**
+   ([`spec/formal/adatp_v2_downgrade.pv`](spec/formal/adatp_v2_downgrade.pv)).
+   Still remaining: an expert review and — for a product making a crypto claim —
+   an independent audit ([`ROADMAP.md`](../ROADMAP.md) tier 9). The symbolic
+   model assumes perfect primitives and perfect pinning; it is necessary, not
+   sufficient.
 4. **Implement** — **server done**: `session/handshake_v2.rs` +
    `server/src/connection.rs` negotiate v2 on `version>=2` (persistent Ed25519
    identity, v1 untouched), with published, machine-checked conformance vectors.

@@ -129,15 +129,21 @@ about. Sequence:
    [`RESULTS.md`](docs/spec/formal/RESULTS.md)): ProVerif confirms secrecy + no
    MITM for v2 and reconstructs the MITM for v1. The free half of the tier-9
    "prove it" step — cleared.
-3. **Verify (remaining)** — expert review + a mixed-version downgrade query +
-   an independent audit (the paid tier-9 item). Symbolic ≠ audited.
-4. **Implement** — **server done**: `core/src/session/handshake_v2.rs` +
-   `server/src/connection.rs` negotiate the v2 handshake on `version>=2` with a
-   persistent Ed25519 identity, v1 untouched; conformance vectors published and
-   machine-checked. **Remaining**: a reference SDK client (JS **and** C — the C
-   one measures the MCU cost and gives the first end-to-end socket test), then
-   the other SDKs.
-5. Update the security claims **last** — after a client speaks v2 and an audit.
+3. **Verify** — the **mixed-version downgrade query is now modeled and passes**
+   (`docs/spec/formal/adatp_v2_downgrade.pv`: a pinning client completes only via
+   v2). Remaining: expert review + an independent audit (the paid tier-9 item).
+   Symbolic ≠ audited.
+4. **Implement** — **server + first client done, verified end-to-end**:
+   `handshake_v2.rs` + `connection.rs` negotiate v2 on `version>=2` (persistent
+   Ed25519 identity, v1 untouched); the **header is bound as AEAD AAD** in v2;
+   `ADATP_MIN_PROTOCOL_VERSION=2` enforces the authenticated handshake; the
+   **Node SDK** implements the v2 client (pin + verify + Finished + AAD) and a
+   live Node↔Rust e2e test passes (handshake, AAD round-trip, wrong-pin reject,
+   downgrade-floor reject). Conformance vectors published + machine-checked in
+   both languages. **Remaining**: a **C** reference client (measures the MCU
+   cost), then the other SDKs (Python, PHP, browser-JS, Arduino).
+5. Update the security claims **last** — after the SDK fleet speaks v2 and an
+   audit lands.
 
 The server reference implementation exists, but **no SDK client speaks v2 yet**,
 so end-to-end it is unproven and **TLS stays mandatory**. v2 is real code behind

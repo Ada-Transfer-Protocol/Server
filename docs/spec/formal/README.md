@@ -29,6 +29,7 @@ security *claim* still waits on implementation + those human steps.
 | :-- | :-- | :-- |
 | `adatp_v1_handshake.pv` | v1: unauthenticated X25519 | Agreement **false**, secrecy **false** — ProVerif reconstructs the active MITM. ✓ (as expected) |
 | `adatp_v2_handshake.pv` | v2: + Ed25519 server signature over the transcript, client pins `spk_S` | Agreement **true**, secrecy **true** — no MITM. ✓ |
+| `adatp_v2_downgrade.pv` | v2 **and** a v1 (unsigned) server sharing one identity + active attacker | Client completes **only** via v2 (agreement **true**), secrecy **true** — no silent downgrade. ✓ |
 
 The contrast is the point: same primitives, and the *only* difference is the
 server signature + the client's identity check — so if v1 fails and v2 holds,
@@ -40,6 +41,7 @@ the signature is demonstrably what closes the gap.
 # Debian/Ubuntu: apt-get install proverif   — or build from source / opam
 proverif adatp_v1_handshake.pv    # expect: the agreement query is false (attack trace printed)
 proverif adatp_v2_handshake.pv    # expect: both queries true
+proverif adatp_v2_downgrade.pv    # expect: both queries true (client completes only via v2)
 ```
 
 ## Modeling notes & known limitations
@@ -56,8 +58,10 @@ proverif adatp_v2_handshake.pv    # expect: both queries true
 - Key distribution is modeled as **perfect pinning** (the client already holds
   `spk_S`). TOFU and the first-contact window are **not** modeled and remain a
   real-world risk (see the spec §4).
-- Downgrade (v2-client ↔ v1-server) is argued in prose in the spec §5, not yet
-  encoded as a mixed-version ProVerif query — a good next addition.
+- Downgrade (v2-client ↔ v1-server) is **now encoded** as a dedicated model
+  (`adatp_v2_downgrade.pv`) and passes: a pinning client completes only via v2
+  even with a v1 server on the same attacker-controlled network. The server-side
+  `ADATP_MIN_PROTOCOL_VERSION` floor enforces the same policy operationally.
 
-Confirming these models (and adding the mixed-version downgrade query) is a
-concrete, no-cost roadmap task; an independent audit remains the paid tier.
+An independent audit (ROADMAP tier 9) remains the paid, human tier — the
+symbolic models are necessary, not sufficient.
