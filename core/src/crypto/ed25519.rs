@@ -1,5 +1,5 @@
 use super::CryptoError;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use rand::{rngs::OsRng, RngCore};
 
 pub struct SigningKeyPair {
@@ -55,7 +55,9 @@ pub fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(),
     sig_bytes.copy_from_slice(signature);
     let sig = Signature::from_bytes(&sig_bytes);
 
+    // verify_strict rejects small-order/non-canonical R and A points, closing
+    // Ed25519 cofactor malleability (RFC 8032 §5.4.6 / the "verify_strict" note).
     verifier
-        .verify(message, &sig)
+        .verify_strict(message, &sig)
         .map_err(|_| CryptoError::SignatureError)
 }

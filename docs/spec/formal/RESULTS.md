@@ -26,7 +26,7 @@ RESULT inj-event(ClientDone(eC,eS)) ==> inj-event(ServerV2Ran(eC,eS)) is true.
 Interpretation: with a v2 (signing) server AND a v1 (unsigned) server sharing the same identity on the same attacker-controlled network, a pinning client that requires a signature completes **only** with a genuine v2 server run — never the v1 path. The pin + mandatory signature provably defeats a silent version downgrade, and secrecy still holds. (Complements the server-side `ADATP_MIN_PROTOCOL_VERSION` floor, which enforces the same policy operationally.)
 
 ## Caveats (why this is necessary, not sufficient)
-- Symbolic (Dolev-Yao) model: perfect crypto assumed. Does NOT cover X25519 small-subgroup/point-validation, Ed25519 cofactor/malleability, or nonce reuse — those are implementation concerns.
+- Symbolic (Dolev-Yao) model: perfect crypto assumed. It does not, by itself, cover X25519 low-order points, Ed25519 cofactor malleability, or AEAD nonce reuse — those are implementation concerns. **Two of these are now handled in code**: `crypto/x25519.rs` rejects a non-contributory exchange (`was_contributory()` — low-order point → all-zero secret), and `crypto/ed25519.rs` uses `verify_strict` (rejects small-order/non-canonical points). Nonce reuse is prevented by the strictly-increasing sequence → IV derivation.
 - The header-as-AAD binding is now implemented in code (v2 sessions) and checked by tests, but the symbolic models here abstract AEAD as perfect and do not separately model it.
 - Key distribution is modeled as perfect pinning; TOFU first-contact is not modeled.
 - Independent review + an audit (ROADMAP tier 9) remain the paid, human step.
