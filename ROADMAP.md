@@ -76,9 +76,11 @@ over-promising — were executed and verified:
    now describes real, tested behaviour. **Remaining:** cross-node presence/
    membership, and stronger delivery than best-effort (Redis Streams / NATS
    JetStream) for at-least-once.
-2. **Published benchmarks.** p50/p95/p99 at 10k/50k concurrent connections, CPU,
-   RAM, reconnect-storm behaviour — from the harness now in the repo, with the
-   reproduce script. Numbers on the README's first screen.
+2. **Published benchmarks.** 🟡 **Reference sample published** — real p50/p95/p99,
+   throughput, CPU + RSS at 100/250/500 clients from the harness, in
+   [`docs/production/benchmarks.md`](docs/production/benchmarks.md) (debug build,
+   laptop — honest sample, not a spec). **Remaining:** a `--release`, 10k/50k
+   run on dedicated hardware, and the headline number on the README.
 3. **Continuous fuzzing.** The `cargo-fuzz` target running in CI on every push;
    a binary parser that isn't fuzzed is not acceptable.
 4. **Real observability.** OpenTelemetry traces + a proper Prometheus metric set

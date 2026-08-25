@@ -1,11 +1,12 @@
 # Benchmarks
 
-> **No performance numbers are published here yet.** The tables below are
-> intentionally empty. Run the harness on your own build and hardware and fill
-> them with REAL measured values — do not copy numbers from anywhere else, and
-> do not treat any figure quoted elsewhere in the docs as an official
-> benchmark. Latency and throughput depend entirely on hardware, build profile
-> (debug vs `--release`), room fan-out, and payload size.
+> **The numbers below are REAL, measured by the harness** on the environment
+> named in the table — treat them as a **reference sample, not an official spec**.
+> They were taken on a **debug build** on a laptop (a `--release` build is
+> faster), single node. Reproduce on your own build and hardware; do not treat
+> any figure quoted elsewhere in the docs as an official benchmark. Latency and
+> throughput depend entirely on hardware, build profile (debug vs `--release`),
+> room fan-out, and payload size.
 
 ## What is measured
 
@@ -66,27 +67,35 @@ so every delivery yields an end-to-end latency sample
 > Node must trust the proxy's certificate (or set
 > `NODE_TLS_REJECT_UNAUTHORIZED=0` for a local self-signed run only).
 
-## Results (fill in — currently unpublished)
+## Results — reference sample (reproduce on your own hardware)
 
-**Environment** (fill in every field before sharing results):
+**Environment:**
 
 | Field | Value |
 | :-- | :-- |
-| CPU (model / cores) | _tbd_ |
-| RAM | _tbd_ |
-| OS / kernel | _tbd_ |
-| Server build | _tbd_ (`--release` recommended) |
-| Deployment | _tbd_ (native / docker / k8s) |
-| AdaTP version | _tbd_ |
-| Date | _tbd_ |
+| CPU (model / cores) | Apple M4 Pro / 14 cores |
+| RAM | 48 GB |
+| OS / kernel | macOS (Darwin 25.3.0) |
+| Server build | **debug** (`cargo build`) — `--release` would be faster |
+| Deployment | native, single node, `MSG_RATE_LIMIT=0`, `AUTH_DRIVER=none` |
+| AdaTP version | 1.2.0 |
+| Date | 2026-08-26 |
 
-**Measured** (one row per concurrency level; copy from the generated `.md`):
+**Measured** — each run: `--rooms 10 --rate 10 --duration 10`, so every message
+fans out to ~(clients/10) room members (that is why `recv/s ≫ sent/s`):
 
 | clients | connected | sent/s | recv/s | p50 ms | p95 ms | p99 ms | CPU avg % | CPU peak % | RSS avg MB | RSS peak MB |
 | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |
-| _tbd_ | | | | | | | | | | |
-| _tbd_ | | | | | | | | | | |
-| _tbd_ | | | | | | | | | | |
+| 100 | 100/100 | 979 | 9772 | 7 | 16 | 19 | 37.3 | 46.0 | 21.2 | 21.8 |
+| 250 | 250/250 | 2440 | 60994 | 13 | 22 | 27 | 115.0 | 140.4 | 26.2 | 26.8 |
+| 500 | 500/500 | 4873 | 243074 | 8 | 15 | 21 | 238.3 | 271.7 | 32.1 | 32.7 |
+
+Read at face value: on this laptop a single **debug** node held 500 concurrent
+clients delivering ~243k messages/second (fan-out) at p99 ≈ 21 ms, 0 connection
+or socket errors, in ~32 MB RSS. These are honest sample numbers, not a
+production-scale (10k/50k) benchmark — that needs dedicated hardware and a
+`--release` build. The point of publishing them is that the harness runs and the
+tables are no longer empty; run it on your target to get numbers that bind.
 
 ## Reading the numbers honestly
 
@@ -96,7 +105,8 @@ so every delivery yields an end-to-end latency sample
 - **Watch `dropped_messages`.** Check `/api/metrics` after a run
   ([observability.md](./observability.md)); non-zero drops mean the server shed
   load for slow consumers and the latency percentiles understate real backlog.
-- **Single node.** AdaTP v1 is one process; these numbers do not extrapolate
-  across replicas (there is no clustering — see
-  [ha.md](./ha.md)).
+- **Single node here.** These numbers are one process. Multiple nodes can now
+  share rooms via the Redis backplane (`ADATP_BACKPLANE_URL` — see
+  [ha.md](./ha.md)), which adds a Redis hop to cross-node deliveries; benchmark
+  that topology separately rather than extrapolating these single-node figures.
 - **Debug builds are far slower** than `--release`. Always state the profile.
