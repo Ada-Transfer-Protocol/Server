@@ -2,11 +2,11 @@
   AdaTP protocol v2 — authenticated handshake (PROPOSED).
   Symbolic (Dolev-Yao) model in the applied pi calculus for ProVerif.
 
-  STATUS: UNCHECKED STARTING POINT. proverif was not available in the authoring
-  environment, so this model has NOT been run. It requires (1) `proverif
-  adatp_v2_handshake.pv` to actually pass, and (2) review by someone fluent in
-  symbolic protocol analysis before any security claim rests on it. See
-  ../12-authenticated-handshake.md and ../../SECURITY_MODEL.md §11.
+  STATUS: RUN — PASSES. ProVerif reports both queries true (session-key secrecy
+  and injective agreement / no MITM). Full output in RESULTS.md. This is a
+  symbolic model (perfect primitives, perfect pinning); it still needs expert
+  review + an audit, and a mixed-version downgrade query, before a security
+  claim rests on it. See ../12-authenticated-handshake.md and ../../SECURITY_MODEL.md §11.
 
   Goal: with the server's long-term Ed25519 key pinned by the client, show
     (A) session-key secrecy against an active attacker, and
@@ -23,13 +23,12 @@ const g: G.
 fun dhexp(G, exp): G.
 equation forall x: exp, y: exp; dhexp(dhexp(g,x),y) = dhexp(dhexp(g,y),x).
 
-(* ---- Ed25519 signatures ---- *)
+(* ---- Ed25519 signatures (message-recovering verify: the standard ProVerif idiom) ---- *)
 type sskey.
 type spkey.
 fun spk(sskey): spkey.
 fun sign(bitstring, sskey): bitstring.
-fun true(): bitstring.
-reduc forall m: bitstring, k: sskey; checksign(m, sign(m,k), spk(k)) = true().
+reduc forall m: bitstring, k: sskey; checksign(sign(m,k), spk(k)) = m.
 
 (* ---- KDF + AEAD ---- *)
 type key.
@@ -74,9 +73,10 @@ let Client(spkS: spkey) =
     in(c, (epkS: G, spkS2: spkey, sig: bitstring));
     (* (1) identity check: the received key must equal the pinned key *)
     if spkS2 = spkS then
-    (* (2) signature over the full transcript must verify under the pinned key *)
+    (* (2) signature over the full transcript must verify under the pinned key:
+           checksign recovers the signed message; bind it to the expected th *)
     let th = h((LABEL_HS, epkC, epkS, spkS)) in
-    if checksign(th, sig, spkS) = true() then
+    let (=th) = checksign(sig, spkS) in
     let ss = dhexp(epkS, x) in
     let k = hkdf(ss) in
     event ClientDone(epkC, epkS);

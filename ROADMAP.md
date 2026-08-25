@@ -125,11 +125,12 @@ about. Sequence:
 1. **Specify** — done: [`docs/spec/12-authenticated-handshake.md`](docs/spec/12-authenticated-handshake.md)
    (SIGMA-style Ed25519-signed transcript, key pinning/TOFU, downgrade defense,
    header-as-AAD), as an **opt-in protocol v2** — v1 untouched.
-2. **Formally model** — done as a reviewable, not-yet-run starting point:
-   [`docs/spec/formal/`](docs/spec/formal/) (ProVerif; v1 should expose the
-   MITM, v2 should hold). The free half of the tier-9 "prove it" step.
-3. **Verify** — run + review the models (+ the downgrade query); an independent
-   audit is the paid tier-9 item.
+2. **Formally model** — **done and run** ([`docs/spec/formal/`](docs/spec/formal/),
+   [`RESULTS.md`](docs/spec/formal/RESULTS.md)): ProVerif confirms secrecy + no
+   MITM for v2 and reconstructs the MITM for v1. The free half of the tier-9
+   "prove it" step — cleared.
+3. **Verify (remaining)** — expert review + a mixed-version downgrade query +
+   an independent audit (the paid tier-9 item). Symbolic ≠ audited.
 4. **Implement** — only then wire `core/src/crypto/ed25519.rs` into a v2
    handshake behind version negotiation; a C reference SDK measures the MCU
    cost; new conformance vectors; other SDKs follow.

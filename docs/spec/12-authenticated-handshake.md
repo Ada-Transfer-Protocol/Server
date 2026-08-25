@@ -1,13 +1,16 @@
 # 12 — Authenticated Handshake (Protocol v2)
 
-> **Status: PROPOSED DESIGN — not yet implemented.** This chapter specifies an
-> *authenticated* key exchange for AdaTP protocol **version 2**. It exists so
-> the design can be reviewed and **formally verified before any code ships**
-> (see [`formal/`](./formal/)). Protocol **v1 is unchanged**; nothing here is
-> active in a shipped build. Do **not** describe the server as MITM-resistant on
-> the basis of this document — that claim is earned only once the model checks,
-> an implementation lands behind version negotiation, and the wire vectors are
-> published. See [`../SECURITY_MODEL.md`](../SECURITY_MODEL.md) §11.
+> **Status: DESIGN — formally verified in the symbolic model, NOT yet
+> implemented.** This chapter specifies an *authenticated* key exchange for
+> AdaTP protocol **version 2**. Its security has been checked with ProVerif
+> against an active attacker — secrecy and no-MITM hold for v2, and the model
+> reconstructs the MITM for the unauthenticated v1 (results:
+> [`formal/RESULTS.md`](./formal/RESULTS.md)). That is the symbolic half only.
+> Protocol **v1 is unchanged**; nothing here is active in a shipped build. Do
+> **not** describe the server as MITM-resistant yet — that claim is earned once
+> an implementation lands behind version negotiation, the wire vectors are
+> published, and (ideally) an independent audit is done. **TLS remains
+> mandatory** meanwhile. See [`../SECURITY_MODEL.md`](../SECURITY_MODEL.md) §11.
 
 ## 1. Why
 
@@ -116,23 +119,28 @@ downgrade defense. Clients with no known key MAY use TOFU or fall back to v1
   silently downgrading.
 - See [`10-versioning.md`](./10-versioning.md) for the version field.
 
-## 6. Security properties (to be proven, not asserted)
+## 6. Security properties (proven in the symbolic model)
 
-The formal model in [`formal/adatp_handshake.pv`](./formal/adatp_handshake.pv)
-must establish, against a Dolev-Yao active attacker:
+The ProVerif models in [`formal/`](./formal/) establish, against a Dolev-Yao
+active attacker (full output: [`formal/RESULTS.md`](./formal/RESULTS.md)):
 
-1. **Server authentication** — if C completes a session ostensibly with S, then
-   S participated with the same transcript (agreement on `epk_C`, `epk_S`,
-   version). Corollary: **no MITM** when `spk_S` is correctly pinned.
-2. **Session-key secrecy** — the attacker cannot derive `k`.
-3. **Downgrade resistance** — a v2 client with a known key never completes a v1
-   exchange with S.
-4. It must also **reproduce the v1 MITM** (a sanity check that the model has
-   teeth): with the signature removed, authentication fails.
+1. **Server authentication** ✓ — `inj-event(ClientDone) ==> inj-event(ServerRan)`
+   is **true**: if C completes ostensibly with S, S ran the same transcript
+   (agreement on `epk_C`, `epk_S`). Corollary: **no MITM** when `spk_S` is
+   pinned.
+2. **Session-key secrecy** ✓ — `attacker(secretMsg)` is **false** (the attacker
+   cannot derive `k`).
+3. **v1 MITM reproduced** ✓ — the control model (`adatp_v1_handshake.pv`) has
+   both queries **false**, so ProVerif reconstructs the attack the signature
+   closes. The model has teeth.
+4. **Downgrade resistance** — argued in prose (§5); **not yet** encoded as a
+   mixed-version ProVerif query. A noted next addition.
 
-Until that model checks (and, ideally, an independent review or audit —
-[`../../ROADMAP.md`](../../ROADMAP.md) tier 9), v2 is a *design*, and the honest
-posture remains **TLS-mandatory** ([`08-security.md`](./08-security.md)).
+This is the *symbolic* proof — perfect primitives, perfect pinning. It does not
+replace an independent review or an audit ([`../../ROADMAP.md`](../../ROADMAP.md)
+tier 9), and it is not an implementation. Until v2 **ships** (with published
+vectors), the honest posture remains **TLS-mandatory**
+([`08-security.md`](./08-security.md)).
 
 ## 7. Implementation plan (after verification, coordinated)
 

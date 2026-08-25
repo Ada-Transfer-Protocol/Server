@@ -6,7 +6,9 @@
   (the attacker runs a separate exchange with each side). This is the sanity
   check that the model has teeth and that v2's signature is what closes the gap.
 
-  STATUS: UNCHECKED — run `proverif adatp_v1_handshake.pv`. See the README.
+  STATUS: RUN — as expected, the agreement and secrecy queries are BOTH FALSE:
+  ProVerif reconstructs the active MITM. This is the control that proves the
+  model has teeth (and that v2's signature is what closes the gap). See RESULTS.md.
 *)
 
 free c: channel.

@@ -9,20 +9,26 @@ that can be *checked*, not asserted — the free half of the "prove it" step on
 the [roadmap](../../../ROADMAP.md) (TLS 1.3, Signal and WireGuard were all
 modeled this way).
 
-## ⚠️ Status
+## ✅ Status — run and passing (full output in [`RESULTS.md`](./RESULTS.md))
 
-**These models have NOT been run** — `proverif` was not available where they
-were written. They are a **starting point that needs (a) to actually pass, and
-(b) review by someone fluent in symbolic analysis** before any claim rests on
-them. A model that "verifies" because it is mis-modeled is worse than none.
-Treat the expected results below as *hypotheses to confirm*, not facts.
+Both models were executed with ProVerif and give the expected results: v1's
+agreement query is **false** (ProVerif reconstructs the active MITM and breaks
+secrecy), and v2's secrecy and injective-agreement queries are both **true**
+(no MITM, given a correctly pinned server key).
+
+This is the symbolic — "prove it, don't claim it" — half, and it is **necessary
+but not sufficient**: it assumes perfect cryptographic primitives, models key
+pinning as perfect, and does **not** replace review by a symbolic-analysis
+expert or an independent audit ([roadmap](../../../ROADMAP.md) tier 9). It also
+does not yet include a mixed-version downgrade query (see limitations). The
+security *claim* still waits on implementation + those human steps.
 
 ## Files
 
-| File | Models | Expected (to confirm) |
+| File | Models | Result (ProVerif) |
 | :-- | :-- | :-- |
-| `adatp_v1_handshake.pv` | v1: unauthenticated X25519 | Agreement query **FALSE** — ProVerif finds the active MITM. Secrecy likely broken. |
-| `adatp_v2_handshake.pv` | v2: + Ed25519 server signature over the transcript, client pins `spk_S` | Agreement query **TRUE** (no MITM); `secretMsg` stays secret. |
+| `adatp_v1_handshake.pv` | v1: unauthenticated X25519 | Agreement **false**, secrecy **false** — ProVerif reconstructs the active MITM. ✓ (as expected) |
+| `adatp_v2_handshake.pv` | v2: + Ed25519 server signature over the transcript, client pins `spk_S` | Agreement **true**, secrecy **true** — no MITM. ✓ |
 
 The contrast is the point: same primitives, and the *only* difference is the
 server signature + the client's identity check — so if v1 fails and v2 holds,

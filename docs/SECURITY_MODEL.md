@@ -432,12 +432,14 @@ docs-ahead-of-code failure this whole review is about. So the sequence is:
    (SIGMA-style: Ed25519 signature over the full transcript, key pinning/TOFU,
    downgrade defense, mandatory encryption, header-as-AAD), as an **opt-in
    protocol v2**; v1 is untouched.
-2. **Formally model** — done (as a reviewable starting point, not yet run):
-   [`spec/formal/`](spec/formal/) — ProVerif models of v1 (expected to expose
-   the MITM) and v2 (expected to hold). This is the free half of "prove it,
-   don't claim it."
-3. **Verify** — run + review the models (and add the mixed-version downgrade
-   query); ideally an independent audit ([`ROADMAP.md`](../ROADMAP.md) tier 9).
+2. **Formally model** — **done and run** ([`spec/formal/`](spec/formal/),
+   results in [`spec/formal/RESULTS.md`](spec/formal/RESULTS.md)): ProVerif
+   confirms secrecy **and** injective agreement (no MITM) for v2, and
+   reconstructs the MITM for v1 — the symbolic "prove it, don't claim it" half.
+3. **Verify (remaining)** — an expert review, a mixed-version downgrade query,
+   and — for a product making a crypto claim — an independent audit
+   ([`ROADMAP.md`](../ROADMAP.md) tier 9). The symbolic model assumes perfect
+   primitives and perfect pinning; it is necessary, not sufficient.
 4. **Implement** — only then wire `ed25519.rs` into a v2 handshake behind
    version negotiation, one reference SDK (incl. C, to prove the MCU claim),
    new conformance vectors, remaining SDKs.
