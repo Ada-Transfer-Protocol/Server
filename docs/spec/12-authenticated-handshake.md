@@ -1,16 +1,20 @@
 # 12 — Authenticated Handshake (Protocol v2)
 
-> **Status: DESIGN — formally verified in the symbolic model, NOT yet
-> implemented.** This chapter specifies an *authenticated* key exchange for
-> AdaTP protocol **version 2**. Its security has been checked with ProVerif
+> **Status: DESIGN + server reference implementation — symbolically verified,
+> no SDK client yet.** This chapter specifies an *authenticated* key exchange
+> for AdaTP protocol **version 2**. Its security has been checked with ProVerif
 > against an active attacker — secrecy and no-MITM hold for v2, and the model
 > reconstructs the MITM for the unauthenticated v1 (results:
-> [`formal/RESULTS.md`](./formal/RESULTS.md)). That is the symbolic half only.
-> Protocol **v1 is unchanged**; nothing here is active in a shipped build. Do
-> **not** describe the server as MITM-resistant yet — that claim is earned once
-> an implementation lands behind version negotiation, the wire vectors are
-> published, and (ideally) an independent audit is done. **TLS remains
-> mandatory** meanwhile. See [`../SECURITY_MODEL.md`](../SECURITY_MODEL.md) §11.
+> [`formal/RESULTS.md`](./formal/RESULTS.md)). The **server** now implements it
+> behind version negotiation (`core/src/session/handshake_v2.rs` +
+> `server/src/connection.rs`; golden vectors in
+> [`../../tests/conformance/vectors/adatp-v2-handshake-vectors.json`](../../tests/conformance/vectors/adatp-v2-handshake-vectors.json)),
+> with the v1 path **unchanged**. What is *not* done: **no shipped SDK client
+> negotiates v2**, so the wire path is exercised by tests + a server boot, not
+> yet end-to-end; and there is no independent audit. Do **not** describe the
+> deployment as MITM-resistant yet — that is earned once a client speaks v2 and
+> pins the key. **TLS remains mandatory** meanwhile. See
+> [`../SECURITY_MODEL.md`](../SECURITY_MODEL.md) §11.
 
 ## 1. Why
 
@@ -144,13 +148,17 @@ vectors), the honest posture remains **TLS-mandatory**
 
 ## 7. Implementation plan (after verification, coordinated)
 
-1. Model checks in ProVerif (+ optional Tamarin) → design frozen, vectors drawn.
-2. Server: wire `core/src/crypto/ed25519.rs` (already present, unused) into the
-   handshake behind `ver` negotiation; v1 path untouched; add v2 conformance
-   vectors.
-3. One reference SDK (JS **and** C — the C one proves the MCU claim) implements
-   v2 + key pinning; measure the added handshake cost on an STM32.
-4. Remaining SDKs follow, each replaying the new vectors.
-5. Only then update the security claims and README.
+1. ✅ **Model checks in ProVerif** → design frozen, vectors drawn
+   ([`formal/RESULTS.md`](./formal/RESULTS.md)).
+2. ✅ **Server**: `handshake_v2.rs` implements the signed transcript + client
+   verify + key confirmation; `connection.rs` negotiates it on `version>=2` with
+   the v1 path untouched; a persistent Ed25519 identity is generated on first
+   boot; v2 conformance vectors published and machine-checked against the
+   reference. *(Optional Tamarin cross-check still open.)*
+3. ⬜ **One reference SDK (JS *and* C — the C one proves the MCU claim)**
+   implements v2 + key pinning; this is where the first true end-to-end,
+   socket-level v2 test lands. Measure the added handshake cost on an STM32.
+4. ⬜ Remaining SDKs follow, each replaying the new vectors.
+5. ⬜ Only then update the security claims and README.
 
-*Nothing in steps 2–5 happens before step 1.*
+*Steps 1–2 are done; a security *claim* still waits on 3–5 plus an audit.*

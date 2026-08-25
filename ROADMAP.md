@@ -131,13 +131,17 @@ about. Sequence:
    "prove it" step — cleared.
 3. **Verify (remaining)** — expert review + a mixed-version downgrade query +
    an independent audit (the paid tier-9 item). Symbolic ≠ audited.
-4. **Implement** — only then wire `core/src/crypto/ed25519.rs` into a v2
-   handshake behind version negotiation; a C reference SDK measures the MCU
-   cost; new conformance vectors; other SDKs follow.
-5. Update the security claims **last**.
+4. **Implement** — **server done**: `core/src/session/handshake_v2.rs` +
+   `server/src/connection.rs` negotiate the v2 handshake on `version>=2` with a
+   persistent Ed25519 identity, v1 untouched; conformance vectors published and
+   machine-checked. **Remaining**: a reference SDK client (JS **and** C — the C
+   one measures the MCU cost and gives the first end-to-end socket test), then
+   the other SDKs.
+5. Update the security claims **last** — after a client speaks v2 and an audit.
 
-Until step 3 passes, **TLS stays mandatory** and v2 is a design — concrete and
-checkable now, instead of a hand-wave.
+The server reference implementation exists, but **no SDK client speaks v2 yet**,
+so end-to-end it is unproven and **TLS stays mandatory**. v2 is real code behind
+version negotiation — concrete and checkable — not yet a shipped guarantee.
 
 ## Tier 11 — the embedded-first bet (the actual goal)
 

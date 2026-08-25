@@ -440,14 +440,18 @@ docs-ahead-of-code failure this whole review is about. So the sequence is:
    and — for a product making a crypto claim — an independent audit
    ([`ROADMAP.md`](../ROADMAP.md) tier 9). The symbolic model assumes perfect
    primitives and perfect pinning; it is necessary, not sufficient.
-4. **Implement** — only then wire `ed25519.rs` into a v2 handshake behind
-   version negotiation, one reference SDK (incl. C, to prove the MCU claim),
-   new conformance vectors, remaining SDKs.
-5. **Only then** update the security claims.
+4. **Implement** — **server done**: `session/handshake_v2.rs` +
+   `server/src/connection.rs` negotiate v2 on `version>=2` (persistent Ed25519
+   identity, v1 untouched), with published, machine-checked conformance vectors.
+   **Remaining**: a reference SDK client (incl. C, to prove the MCU claim and
+   give the first end-to-end test), then the other SDKs.
+5. **Only then** update the security claims — after a client speaks v2 and an
+   audit.
 
-Until step 3 passes, **TLS remains mandatory** and v2 is a *design*. Nothing in
-the shipped build changed; what changed is that the path is now concrete and
-checkable instead of a hand-wave.
+**No SDK client negotiates v2 yet**, so end-to-end the guarantee is unproven and
+**TLS remains mandatory**. The shipped v1 wire is unchanged; what changed is that
+the server now has a real, verified v2 reference implementation behind version
+negotiation, not just a design.
 
 **Recommendation:** ship Option B now (TLS mandatory — the current guidance),
 and pursue Option A as the roadmap item that lets a ~20 KB-RAM MCU be a
