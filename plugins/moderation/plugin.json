@@ -1,0 +1,23 @@
+{
+    "name": "moderation",
+    "version": "1.0.0",
+    "description": "Blocks text messages containing configured words; exposes moderation.check.",
+    "entry": ["node", "index.mjs"],
+    "permissions": ["tools", "hooks:text", "rooms:broadcast"],
+    "tools": [
+        {
+            "name": "moderation.check",
+            "description": "Checks a text against the blocklist without sending it.",
+            "schema": {
+                "type": "object",
+                "properties": { "text": { "type": "string" } },
+                "required": ["text"]
+            },
+            "timeout_ms": 2000,
+            "rate_limit_per_min": 300
+        }
+    ],
+    "hooks": ["text"],
+    "hook_timeout_ms": 400,
+    "hook_failure_policy": "allow"
+}

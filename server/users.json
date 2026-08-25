@@ -28,5 +28,10 @@
         "username": "cbot",
         "password": "secret_password",
         "role": "bot"
+    },
+    {
+        "username": "esp32_device",
+        "password": "secret",
+        "role": "bot"
     }
 ]

@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "release/**"]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install OpenSSL headers (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build (vendored, offline)
+        run: cargo build --workspace --offline --release
+      - name: Unit + conformance tests (golden vectors)
+        run: cargo test --workspace --offline
+      - name: Upload server binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: adatp-server-${{ matrix.os }}
+          path: target/release/adatp-server

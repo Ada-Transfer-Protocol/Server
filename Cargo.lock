@@ -4,20 +4,22 @@ version = 4
 
 [[package]]
 name = "adatp-cli"
-version = "2.0.0"
+version = "1.0.0"
 dependencies = [
  "adatp-core",
  "anyhow",
  "bytes",
  "clap",
+ "futures",
  "serde_json",
  "tokio",
+ "tokio-tungstenite",
  "uuid",
 ]
 
 [[package]]
 name = "adatp-core"
-version = "2.0.0"
+version = "1.0.0"
 dependencies = [
  "aes-gcm",
  "bincode",
@@ -28,6 +30,7 @@ dependencies = [
  "hkdf",
  "rand",
  "serde",
+ "serde_json",
  "sha2",
  "thiserror",
  "tokio",
@@ -37,7 +40,7 @@ dependencies = [
 
 [[package]]
 name = "adatp-server"
-version = "2.0.0"
+version = "1.0.0"
 dependencies = [
  "adatp-core",
  "anyhow",
@@ -50,15 +53,18 @@ dependencies = [
  "dotenvy",
  "env_logger",
  "futures",
+ "hmac",
  "log",
  "once_cell",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "tokio",
  "tower 0.4.13",
  "tower-http",
+ "url",
  "uuid",
 ]
 

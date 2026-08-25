@@ -1,0 +1,23 @@
+{
+    "name": "echo",
+    "version": "1.0.0",
+    "description": "Reference plugin: echoes its arguments back and emits a custom event per call.",
+    "entry": ["node", "index.mjs"],
+    "permissions": ["tools", "emit:events"],
+    "tools": [
+        {
+            "name": "echo.say",
+            "description": "Returns the given text, uppercased on request.",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string" },
+                    "uppercase": { "type": "boolean" }
+                },
+                "required": ["text"]
+            },
+            "timeout_ms": 3000,
+            "rate_limit_per_min": 120
+        }
+    ]
+}

@@ -1,0 +1,125 @@
+{
+  "name": "AdaTP v1 golden vectors",
+  "version": 1,
+  "cases": [
+    {
+      "id": "frame-plaintext-text",
+      "description": "Plaintext TextMessage (0x0020) framing",
+      "input": {
+        "msg_type": "0x0020",
+        "flags": 0,
+        "sequence": "0",
+        "timestamp_ms": "1700000000000",
+        "session_id": "000102030405060708090a0b0c0d0e0f",
+        "payload_utf8": "Hello, AdaTP!"
+      },
+      "expected_frame_hex": "544144410100000d000000000000000000000020000068e5cf8b010000000102030405060708090a0b0c0d0e0f48656c6c6f2c20416461545021"
+    },
+    {
+      "id": "frame-plaintext-joinroom",
+      "description": "Plaintext JoinRoom (0x00A0) framing",
+      "input": {
+        "msg_type": "0x00A0",
+        "flags": 0,
+        "sequence": "0",
+        "timestamp_ms": "1700000000000",
+        "session_id": "000102030405060708090a0b0c0d0e0f",
+        "payload_utf8": "lobby"
+      },
+      "expected_frame_hex": "54414441010000050000000000000000000000a0000068e5cf8b010000000102030405060708090a0b0c0d0e0f6c6f626279"
+    },
+    {
+      "id": "kdf-hkdf-sha256",
+      "description": "HKDF-SHA256 session key derivation (salt = 32 zero bytes)",
+      "input": {
+        "shared_secret_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "salt_hex": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "expected": {
+        "client_write_key": "301399aa1f12eae58fca5d5cf30086846fda62c2fcf190ce02613a5bddcc41ee",
+        "server_write_key": "3a5e213e39fff1dbf96170968c89eeaa0d031915ba483f2636bbdb50490327c7",
+        "client_iv_root": "2a2803c4101accc98c471b19",
+        "server_iv_root": "85505ca20fb29f10b663ec88"
+      }
+    },
+    {
+      "id": "nonce-seq-xor",
+      "description": "AES-GCM nonce = iv_root with last 8 bytes XOR seq (LE), seq=5",
+      "input": {
+        "iv_root_hex": "2a2803c4101accc98c471b19",
+        "sequence": "5"
+      },
+      "expected": {
+        "nonce_hex": "2a2803c4151accc98c471b19"
+      }
+    },
+    {
+      "id": "frame-encrypted-text-client",
+      "description": "Encrypted TextMessage from client (client_write key, seq=1, no AAD)",
+      "input": {
+        "msg_type": "0x0020",
+        "flags": "0x0001",
+        "sequence": "1",
+        "timestamp_ms": "1700000000000",
+        "session_id": "000102030405060708090a0b0c0d0e0f",
+        "plaintext_utf8": "secret message",
+        "shared_secret_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      },
+      "expected": {
+        "nonce_hex": "2a2803c4111accc98c471b19",
+        "ciphertext_hex": "63ed1e55e08c367187732cefd1cf",
+        "auth_tag_hex": "74772e5928b8238c2d333bbdd2546b64",
+        "frame_hex": "544144410101000e000000010000000000000020000068e5cf8b010000000102030405060708090a0b0c0d0e0f63ed1e55e08c367187732cefd1cf74772e5928b8238c2d333bbdd2546b64"
+      }
+    },
+    {
+      "id": "frame-encrypted-gamestate-server",
+      "description": "Encrypted GameState (0x0050) from server (server_write key, seq=2)",
+      "input": {
+        "msg_type": "0x0050",
+        "flags": "0x0001",
+        "sequence": "2",
+        "timestamp_ms": "1700000000000",
+        "session_id": "000102030405060708090a0b0c0d0e0f",
+        "plaintext_utf8": "{\"board\":[1,0,2],\"turn\":\"p1\"}",
+        "shared_secret_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      },
+      "expected": {
+        "nonce_hex": "85505ca20db29f10b663ec88",
+        "ciphertext_hex": "1f32f30320d62920f2838e2a5a0a0b677a950f537195d7dba7d2816bf1",
+        "auth_tag_hex": "efbffb990d557a890faacabeffa17d28",
+        "frame_hex": "544144410101001d000000020000000000000050000068e5cf8b010000000102030405060708090a0b0c0d0e0f1f32f30320d62920f2838e2a5a0a0b677a950f537195d7dba7d2816bf1efbffb990d557a890faacabeffa17d28"
+      }
+    },
+    {
+      "id": "reject-bad-magic",
+      "description": "Frame with wrong magic MUST be rejected",
+      "input": {
+        "frame_hex": "deadbeef01000001000000000000000000000020000068e5cf8b010000000102030405060708090a0b0c0d0e0f78"
+      },
+      "expected": {
+        "error": "invalid_magic"
+      }
+    },
+    {
+      "id": "reject-short-header",
+      "description": "Frame shorter than 45 bytes MUST be rejected",
+      "input": {
+        "frame_hex": "5441444101000000000000000000000000000020000068e5cf8b01000000"
+      },
+      "expected": {
+        "error": "short_header"
+      }
+    },
+    {
+      "id": "reject-tampered-tag",
+      "description": "Encrypted frame with flipped tag bit MUST fail decryption",
+      "input": {
+        "note": "Take frame-encrypted-text-client.frame_hex and XOR the last byte with 0x01"
+      },
+      "expected": {
+        "error": "decrypt_failed"
+      }
+    }
+  ]
+}

@@ -1,252 +1,153 @@
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::broadcast;
-use std::sync::Arc;
-use std::collections::HashMap;
-use tokio::sync::Mutex;
 use std::error::Error;
-use env_logger;
-use log::{info, error, warn};
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use dotenvy::dotenv;
-use std::env;
+use log::info;
 
-use adatp_core::{Packet, MessageType, PacketFlags};
-use adatp_core::transport::tcp::TcpTransport;
-
-// Modules
-mod metrics;
-mod db;
+mod admin;
 mod api;
+mod auth;
+mod config;
+mod connection;
+mod db;
+mod hub;
+mod load;
+mod logging;
+mod metrics;
+mod plugins;
+mod silo;
+mod webhooks;
 
-use crate::metrics::Metrics;
-use crate::db::DbManager;
 use crate::api::AppState;
+use crate::auth::AuthManager;
+use crate::config::Config;
+use crate::db::DbManager;
+use crate::hub::Hub;
+use crate::metrics::Metrics;
+use crate::plugins::PluginManager;
+use crate::webhooks::WebhookManager;
 
-/// Shared state for the chat server
-struct SharedState {
-    #[allow(dead_code)]
-    users: Mutex<HashMap<String, String>>, 
-    metrics: Arc<Metrics>,
-}
-
-#[derive(serde::Deserialize, Clone, Debug)]
-#[allow(dead_code)]
-struct UserData {
-    username: String,
-    password: String,
-    role: String,
-}
-
+/// AdaTP v1 server.
+///
+/// Single listener (default 0.0.0.0:3000) serving:
+///   - `GET /ws`       — the AdaTP WebSocket data plane (binary frames)
+///   - `GET /healthz`  — liveness
+///   - `GET /readyz`   — readiness (DB reachable)
+///   - `GET /api/*`    — control-plane endpoints (x-api-key protected)
+///
+/// The pre-1.0 raw-TCP listener on :8444 has been removed; see docs/legacy.md
+/// in the workspace root for the migration note.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv().ok();
-    env_logger::init();
-    
-    // 1. Ini Broadcast Channel
-    let (tx, _rx) = broadcast::channel(100);
 
-    // 2. Init Metrics (In-Memory)
-    let metrics = Arc::new(Metrics::new());
-    
-    // 3. Init Database (SQLite) for API Keys
-    let db_url = env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:adatp.db".to_string());
-    if !std::path::Path::new("adatp.db").exists() {
-         std::fs::File::create("adatp.db")?; // Touch file for Sqlite
-    }
-    
-    let db_manager = Arc::new(DbManager::new(&db_url).await.expect("Failed to init DB"));
-
-    // 4. Start HTTP API Server
-    let api_state = Arc::new(AppState {
-        metrics: metrics.clone(),
-        db: db_manager.clone(),
-        tx: tx.clone(), // Pass broadcast sender to API for WS
-    });
-    
-    let app = api::create_router(api_state);
-    let http_addr = "0.0.0.0:3000";
-    info!("HTTP API + WebSocket listening on {}", http_addr);
-    
-    // Spawn HTTP Server
-    tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(http_addr).await.unwrap();
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    // 5. Start TCP Chat Server
-    let addr = "0.0.0.0:8444";
-    let listener = TcpListener::bind(addr).await?;
-    info!("TCP Server listening on {}", addr);
-
-    let state = Arc::new(SharedState {
-        users: Mutex::new(HashMap::new()),
-        metrics: metrics.clone(),
-    });
-    
-    // Load users.json for Client Auth
-    let users_config = load_users_config()?;
-
-    loop {
-        let (socket, client_addr) = listener.accept().await?;
-        let tx = tx.clone();
-        #[allow(unused_mut)]
-        let mut rx = tx.subscribe();
-        let state = state.clone();
-        let users_config = users_config.clone();
-
-        tokio::spawn(async move {
-            // Metrics: Inc Connection
-            state.metrics.inc_connection();
-            
-            if let Err(e) = handle_connection(socket, tx, rx, client_addr, state.clone(), users_config).await {
-                error!("Error handling connection from {}: {}", client_addr, e);
-            }
-            
-            // Metrics: Dec Connection
-            state.metrics.dec_connection();
-        });
-    }
-}
-
-fn load_users_config() -> Result<Arc<HashMap<String, UserData>>, Box<dyn Error>> {
-    let content = std::fs::read_to_string("users.json").unwrap_or_else(|_| "[]".to_string());
-    let users_list: Vec<UserData> = serde_json::from_str(&content)?;
-    
-    let mut map = HashMap::new();
-    for u in users_list {
-        map.insert(u.username.clone(), u);
-    }
-    Ok(Arc::new(map))
-}
-
-async fn handle_connection(
-    socket: TcpStream,
-    tx: broadcast::Sender<(String, Vec<u8>)>,
-    mut rx: broadcast::Receiver<(String, Vec<u8>)>,
-    addr: std::net::SocketAddr,
-    state: Arc<SharedState>,
-    _users_config: Arc<HashMap<String, UserData>>
-) -> Result<(), Box<dyn Error>> {
-    // Wrapped Transport
-    let mut transport = TcpTransport::new(socket);
-
-    // 1. Handshake Init
-    let init_packet = transport.read_packet().await?
-        .ok_or("Connection closed during handshake init")?;
-    
-    state.metrics.add_rx(init_packet.to_bytes().len() as u64);
-
-    if init_packet.header.msg_type != MessageType::HandshakeInit {
-        return Err("Expected HandshakeInit".into());
-    }
-
-    info!("Handshake Init from {}", addr);
-
-    // 2. Handshake Response
-    // Send public key (mock 32 bytes for now as we did before)
-    // Real implementation would involve Diffie-Hellman setup here.
-    let resp = Packet::new(
-        MessageType::HandshakeResponse, 
-        vec![0u8; 32].into(), 
-        init_packet.header.session_id
-    ); 
-    
-    state.metrics.add_tx(resp.to_bytes().len() as u64);
-    transport.write_packet(&resp).await?;
-    info!("Sent Handshake Response to {}", addr);
-
-    // 3. Handshake Complete
-    let complete_packet = transport.read_packet().await?
-         .ok_or("Connection closed during handshake complete")?;
-    
-    state.metrics.add_rx(complete_packet.to_bytes().len() as u64);
-
-    if complete_packet.header.msg_type != MessageType::HandshakeComplete {
-        return Err("Expected HandshakeComplete".into());
-    }
-
-    info!("Handshake Complete {}. Session Established.", addr);
-
-    // Auth & Loop State
-    let mut username = "guest".to_string();
-    let mut room = "global".to_string();
-    let mut _authenticated = false;
-    let session_id = complete_packet.header.session_id;
-
-    // Main Loop
-    loop {
-        tokio::select! {
-            // READ from Client
-            res = transport.read_packet() => {
-                match res {
-                    Ok(Some(packet)) => {
-                        state.metrics.add_rx(packet.to_bytes().len() as u64);
-                        
-                        match packet.header.msg_type {
-                            MessageType::AuthRequest => {
-                                 username = "cbot".to_string(); 
-                                 _authenticated = true;
-                                 info!("Auth Success for {}: UserData {{ username: \"{}\", role: \"bot\" }}", addr, username);
-                                 
-                                 let resp = Packet::new(MessageType::AuthSuccess, b"Welcome".to_vec().into(), session_id);
-                                 state.metrics.add_tx(resp.to_bytes().len() as u64);
-                                 transport.write_packet(&resp).await?;
-                            },
-                            
-                            MessageType::JoinRoom => {
-                                 room = "files".to_string(); 
-                                 info!("Client {} switching to {}", username, room);
-                            },
-
-                            MessageType::Disconnect => {
-                                info!("Client {} sent disconnect", addr);
-                                break;
-                            },
-
-                            MessageType::FileInit | MessageType::FileChunk | MessageType::FileComplete | MessageType::TextMessage => {
-                                // Broadcast logic
-                                let packet_bytes = packet.to_bytes().to_vec();
-                                // Ignore send errors (no receivers)
-                                let _ = tx.send((room.clone(), packet_bytes)); 
-                            },
-                            _ => {}
-                        }
-                    },
-                    Ok(None) => {
-                        // Connection closed
-                        break;
-                    },
-                    Err(e) => {
-                        warn!("Error reading packet from {}: {}", addr, e);
-                        break;
-                    }
-                }
-            }
-
-            // WRITE to Client (Broadcast)
-            Ok((msg_room, msg_bytes)) = rx.recv() => {
-                if msg_room == room {
-                    // We have raw bytes. TcpTransport expects a Packet.
-                    // But wait, TcpTransport writes `Packet`.
-                    // Does it have a `write_raw`? No.
-                    // We must Parse the bytes back to Packet? 
-                    // Or extend TcpTransport to write raw bytes?
-                    // Parsing back is safer but adds overhead.
-                    // Given we just broadcasted `packet.to_bytes()`, we can parse it back.
-                    // Or we can modify TcpTransport to allow raw writes, but we can't modify core right now easily without bigger scope.
-                    // Let's Parse back. It's safe.
-                    
-                    if let Ok(pkt) = Packet::from_bytes(bytes::Bytes::from(msg_bytes.clone())) {
-                         state.metrics.add_tx(msg_bytes.len() as u64);
-                         if let Err(e) = transport.write_packet(&pkt).await {
-                             warn!("Error writing broadcast to {}: {}", addr, e);
-                             break;
-                         }
-                    }
-                }
-            }
+    // `adatp-server --healthcheck` probes the local /healthz endpoint and
+    // exits 0/1 — used as the container HEALTHCHECK (no curl needed).
+    if std::env::args().any(|a| a == "--healthcheck") {
+        let port = std::env::var("PORT")
+            .or_else(|_| std::env::var("SERVER_PORT"))
+            .unwrap_or_else(|_| "3000".to_string());
+        let url = format!("http://127.0.0.1:{port}/healthz");
+        match reqwest::get(&url).await {
+            Ok(resp) if resp.status().is_success() => std::process::exit(0),
+            _ => std::process::exit(1),
         }
     }
 
-    info!("Client {} connection handler finished", addr);
+    let logs = logging::BufLogger::init();
+
+    let cfg = Arc::new(Config::load());
+    let metrics = Arc::new(Metrics::new());
+    let hub = Arc::new(Hub::new());
+    let auth = AuthManager::new(&cfg);
+
+    // Ensure the SQLite file exists for sqlite: URLs before connecting.
+    if let Some(path) = cfg.database_url.strip_prefix("sqlite:") {
+        let path = path.trim_start_matches("//");
+        if !path.is_empty() && !std::path::Path::new(path).exists() {
+            std::fs::File::create(path)?;
+        }
+    }
+    let db = Arc::new(DbManager::new(&cfg.database_url).await?);
+
+    let plugins = PluginManager::new(&cfg.plugins_dir, hub.clone());
+    plugins.load_all().await;
+
+    let webhooks = WebhookManager::start(db.clone(), plugins.clone()).await;
+    let load = load::LoadTracker::start(metrics.clone(), hub.clone());
+    let admin_token = admin::resolve_admin_token();
+
+    let state = Arc::new(AppState {
+        metrics,
+        db,
+        hub: hub.clone(),
+        auth,
+        cfg: cfg.clone(),
+        plugins: plugins.clone(),
+        webhooks,
+        load,
+        logs,
+        admin_token,
+        draining: std::sync::atomic::AtomicBool::new(false),
+    });
+    plugins.emit_server_event("server.started", serde_json::json!({ "addr": cfg.bind_addr() }));
+
+    let app = api::create_router(state);
+    let addr = cfg.bind_addr();
+    info!(
+        "AdaTP server listening on {} (WebSocket endpoint: /ws, auth driver: {:?})",
+        addr, cfg.auth_driver
+    );
+
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            eprintln!(
+                "ERROR: {addr} is already in use by another process.\n\
+                 Find it with:  lsof -nP -iTCP:{} -sTCP:LISTEN\n\
+                 Or run AdaTP on another port:  PORT=3100 adatp-server",
+                cfg.port
+            );
+            std::process::exit(1);
+        }
+        Err(e) => return Err(e.into()),
+    };
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal(hub, plugins))
+    .await?;
+
+    info!("Server stopped.");
     Ok(())
+}
+
+async fn shutdown_signal(hub: Arc<Hub>, plugins: Arc<PluginManager>) {
+    // Trap both SIGINT (ctrl-c) and SIGTERM (docker stop / systemd / K8s)
+    // so every orchestrator gets a graceful drain.
+    let ctrl_c = tokio::signal::ctrl_c();
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    info!("Shutdown signal received; closing {} connection(s)...", hub.connection_count());
+    plugins.emit_server_event("server.stopping", serde_json::json!({}));
+    plugins.shutdown_all().await;
+    hub.shutdown_all();
+    // Give connections a moment to flush their Disconnect frames.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 }

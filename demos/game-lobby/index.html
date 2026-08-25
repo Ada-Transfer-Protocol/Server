@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AdaTP Game Lobby — Tic-Tac-Toe</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { --bg:#0f1420; --panel:#171e2e; --line:#2a3550; --fg:#e8edf7; --dim:#8b96ad; --x:#5eead4; --o:#f9a8d4; --accent:#7aa2ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--fg);
+         display:flex; min-height:100vh; align-items:center; justify-content:center; }
+  .app { width:min(680px,94vw); }
+  h1 { font-size:20px; margin:0 0 4px; } h1 span{color:var(--accent);}
+  .sub { color:var(--dim); font-size:13px; margin-bottom:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:12px; }
+  label { display:block; font-size:12px; color:var(--dim); margin-bottom:4px; }
+  input { width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--line);
+          background:#0c1120; color:var(--fg); font:inherit; }
+  .row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; }
+  button { padding:9px 14px; border-radius:8px; border:1px solid var(--line); background:var(--accent);
+           color:#0b1020; font:inherit; font-weight:600; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--fg); }
+  button:disabled { opacity:.4; cursor:default; }
+  .board { display:grid; grid-template-columns:repeat(3,90px); gap:8px; justify-content:center; margin:14px 0; }
+  .cell { width:90px; height:90px; border-radius:10px; border:1px solid var(--line); background:#0c1120;
+          font-size:44px; font-weight:700; color:var(--fg); display:flex; align-items:center; justify-content:center; cursor:pointer; }
+  .cell.x { color:var(--x); } .cell.o { color:var(--o); }
+  .status { text-align:center; color:var(--dim); min-height:22px; }
+  .log { font:12px/1.6 ui-monospace,monospace; color:var(--dim); max-height:140px; overflow-y:auto; white-space:pre-wrap; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:99px; font-size:12px; border:1px solid var(--line); color:var(--dim); }
+  .pill.ok { color:var(--x); border-color:var(--x); }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>AdaTP <span>Game Lobby</span> — Tic-Tac-Toe</h1>
+  <div class="sub">Two browser windows, one room. State travels as <code>GameState (0x0050)</code> packets.</div>
+
+  <div class="card" id="joinCard">
+    <div class="row">
+      <div><label>Server</label><input id="url" value="ws://127.0.0.1:3000/ws"></div>
+      <div><label>Username</label><input id="user" value="user1"></div>
+      <div><label>Password</label><input id="pass" value="password123" type="password"></div>
+    </div>
+    <div style="display:flex; gap:10px; margin-top:12px; align-items:end;">
+      <div style="flex:1"><label>Match room</label><input id="room" value="match-1"></div>
+      <button id="joinBtn">Join match</button>
+    </div>
+  </div>
+
+  <div class="card" id="gameCard" style="display:none">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span class="pill" id="connPill">connecting…</span>
+      <span class="pill" id="mePill"></span>
+      <button class="secondary" id="resetBtn">Reset board</button>
+    </div>
+    <div class="board" id="board"></div>
+    <div class="status" id="status">Waiting…</div>
+  </div>
+
+  <div class="card"><div class="log" id="log"></div></div>
+</div>
+
+<script type="module">
+import { AdaTPGame } from '../../sdks/js/dist/adatp.js';
+
+const $ = (id) => document.getElementById(id);
+const log = (m) => { $('log').textContent += m + "\n"; $('log').scrollTop = 1e9; };
+
+let game = null;
+let mySymbol = null;              // 'X' | 'O'
+let state = { board: Array(9).fill(''), turn: 'X', winner: null };
+
+const WINS = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+function winner(b) {
+  for (const [a,c,d] of WINS) if (b[a] && b[a]===b[c] && b[a]===b[d]) return b[a];
+  return b.every(Boolean) ? 'draw' : null;
+}
+
+function render() {
+  const boardEl = $('board');
+  boardEl.innerHTML = '';
+  state.board.forEach((v, i) => {
+    const cell = document.createElement('div');
+    cell.className = 'cell' + (v ? ' ' + v.toLowerCase() : '');
+    cell.textContent = v;
+    cell.onclick = () => move(i);
+    boardEl.appendChild(cell);
+  });
+  const st = $('status');
+  if (state.winner === 'draw') st.textContent = 'Draw. Reset to play again.';
+  else if (state.winner) st.textContent = `${state.winner} wins!` + (state.winner === mySymbol ? ' 🎉' : '');
+  else st.textContent = `Turn: ${state.turn}` + (state.turn === mySymbol ? ' (you)' : '');
+}
+
+function broadcast() {
+  game.sendState({ v: 1, game: 'tictactoe', state });
+}
+
+function move(i) {
+  if (!mySymbol || state.winner || state.turn !== mySymbol || state.board[i]) return;
+  state.board[i] = mySymbol;
+  state.winner = winner(state.board);
+  state.turn = mySymbol === 'X' ? 'O' : 'X';
+  render();
+  broadcast();
+}
+
+$('resetBtn').onclick = () => {
+  state = { board: Array(9).fill(''), turn: 'X', winner: null };
+  render();
+  broadcast();
+};
+
+$('joinBtn').onclick = () => {
+  const room = $('room').value.trim() || 'match-1';
+  game = new AdaTPGame($('url').value, {
+    username: $('user').value,
+    password: $('pass').value,
+    autoConnect: true,
+  });
+
+  game.on('auth', (identity) => {
+    $('connPill').textContent = 'authenticated';
+    $('connPill').className = 'pill ok';
+    log(`auth ok: ${JSON.stringify(identity)}`);
+    game.join(room);
+  });
+  game.on('auth_failure', (reason) => { $('connPill').textContent = 'auth failed'; log('auth failed: ' + reason); });
+  game.on('room_joined', (r) => {
+    log(`joined room '${r}' — announcing presence`);
+    // First to announce claims X; the second sees the claim and takes O.
+    game.say('CLAIM:' + game.getMyId());
+  });
+  game.on('message', (text, sender) => {
+    if (!text.startsWith('CLAIM:')) return;
+    const claimant = text.slice(6);
+    if (claimant === game.getMyId()) {
+      if (!mySymbol) { mySymbol = 'X'; $('mePill').textContent = 'you are X'; log('you claimed X'); render(); }
+    } else if (!mySymbol || mySymbol === 'X') {
+      if (!mySymbol) { mySymbol = 'O'; $('mePill').textContent = 'you are O'; log('opponent is X — you are O'); render(); }
+      else { game.say('CLAIM:' + game.getMyId()); broadcast(); } // re-announce X + sync board to newcomer
+    }
+  });
+  game.on('state', (incoming, sender) => {
+    if (sender === game.getMyId()) return;
+    if (incoming?.game === 'tictactoe' && incoming.state) {
+      state = incoming.state;
+      render();
+    }
+  });
+  game.on('user_left', () => log('peer left the room'));
+  game.on('disconnect', () => { $('connPill').textContent = 'disconnected'; $('connPill').className = 'pill'; });
+
+  $('joinCard').style.display = 'none';
+  $('gameCard').style.display = 'block';
+  render();
+};
+</script>
+</body>
+</html>
