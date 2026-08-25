@@ -5,7 +5,9 @@
 #   docker build -t adatp-server .
 #   docker run -p 3000:3000 adatp-server
 
-FROM rust:1.83-slim-bookworm AS builder
+# 1.85+ required: vendored crates use edition2024. 1.89 matches the
+# toolchain the release was verified with.
+FROM rust:1.89-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         pkg-config libssl-dev \

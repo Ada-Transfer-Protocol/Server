@@ -1,6 +1,18 @@
-target/
-**/target/
+# Workspace build outputs only — NOT **/target/: several vendored crates
+# (e.g. vendor/cc/src/target/) legitimately contain "target" directories.
+/target/
+core/target/
+server/target/
+tools/adatp-cli/target/
+
 .git/
 *.db
 docs/
+tests/
+demos/
 tools/*.sh
+tools/loadtest/
+tools/webhook-receiver/
+tools/build/
+.omc/
+.DS_Store
