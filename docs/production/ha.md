@@ -1,24 +1,40 @@
 # High Availability — honest scope for v1
 
-**The short version:** AdaTP v1 is a single-node server with in-memory
-state. You can build fast *recovery* around it; you cannot build
-zero-interruption *failover*, because no mechanism exists to share rooms,
-sessions or presence between two processes. This page describes what works
-today and names what does not exist.
+**The short version:** AdaTP now supports **multi-node rooms** via a Redis
+routing backplane (`ADATP_BACKPLANE_URL`) — a room broadcast fans out to clients
+on every node, so you can scale room messaging horizontally behind a load
+balancer. What is **still** per-node: session/presence state and membership
+counts (a node only tracks its own connections), so there is no zero-interruption
+*failover handoff* of live sessions. This page describes what works today and
+names what does not exist.
 
-> **Status:** fast *recovery* — Operator-builds (patterns below). Zero-downtime
-> *failover* and multi-node rooms — **Roadmap** (a state backplane;
-> [`../../ROADMAP.md`](../../ROADMAP.md)). This page promises neither.
+> **Status:** **multi-node room messaging — available** (Redis backplane, tested:
+> [`../../tests/backplane/`](../../tests/backplane/)). Fast *recovery* —
+> operator-builds (patterns below). Zero-downtime *failover* of live sessions and
+> cross-node presence/membership — **still roadmap**. This page promises only
+> the first.
 
-## Not available in v1 (do not design around these)
+## Available now — multi-node room messaging (the backplane)
 
-- Clustering / multi-node rooms — two servers are two separate worlds.
-- Room/session state replication or handoff.
+Set `ADATP_BACKPLANE_URL=redis://host:port` on every node and point them at one
+Redis. Each node publishes its room broadcasts to a shared channel and
+re-delivers what it receives to its own local connections. Result: a client on
+node A and a client on node B in the same room exchange messages. Put the nodes
+behind any load balancer (no sticky sessions required for messaging). Delivery is
+best-effort (same as the in-process queues); secure the Redis link at the network
+layer (the routed payload is plaintext, as it is in-process — AdaTP is
+hop-by-hop, not E2E).
+
+## Still not available (do not design around these)
+
+- **Cross-node presence / membership views** — each node reports only its own
+  connections; `list_connections`/room counts are per-node.
+- **Session state replication or live-session failover handoff** — if a node
+  dies, its clients reconnect (to any node) and re-join; in-flight state is gone.
 - Message persistence or replay (delivery is at-most-once —
   [`../architecture/reliability.md`](../architecture/reliability.md)).
-- Sticky-session horizontal scaling (there is nothing to stick between).
 
-These are roadmap items, not configuration you missed.
+These remain roadmap items, not configuration you missed.
 
 ## What a failure actually costs
 
@@ -78,13 +94,20 @@ drain A → probe B with `adatp-cli` end-to-end → shift → keep A as instant
 rollback for one release cycle. Full procedure:
 [upgrade-rollback.md](./upgrade-rollback.md).
 
-## Scaling beyond one node (sharding, app-level)
+## Scaling beyond one node
 
-If one node's capacity is exceeded ([sizing.md](./sizing.md)), split by
-**tenant/room-space at the edge**: `eu.realtime…` / `us.realtime…`, or
-route `/ws` by tenant header to different backends. Rooms never span
-shards; place each tenant wholly on one node. This is DNS/LB design, not an
-AdaTP feature — but it is the honest way to scale v1.
+Two options, depending on whether rooms must span nodes:
+
+1. **Backplane (rooms span nodes).** Run N nodes with `ADATP_BACKPLANE_URL`
+   pointed at one Redis, behind a plain load balancer. Room messages fan out
+   across all nodes — no sharding, no sticky sessions. This is the direct answer
+   to "one node isn't enough."
+2. **Edge sharding (rooms stay on one node).** If you prefer isolation over a
+   shared Redis, split by **tenant/room-space at the edge**: `eu.realtime…` /
+   `us.realtime…`, or route `/ws` by tenant header to different backends; place
+   each tenant wholly on one node. This is DNS/LB design, not an AdaTP feature.
+
+Capacity per node: [sizing.md](./sizing.md).
 
 ## Client-side requirements for any HA story
 

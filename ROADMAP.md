@@ -69,9 +69,13 @@ over-promising — were executed and verified:
 
 ## Tier 8 — "a serious alternative" (single-maintainer, ~6–12 months)
 
-1. **Backplane / multi-node.** A `Backplane` seam with a single-node default and
-   a Redis-Streams (or NATS) implementation for cross-node room fan-out. The day
-   this lands, `ha.md` stops being fiction and horizontal scale is real.
+1. **Backplane / multi-node.** ✅ **Landed (first cut).** A `Backplane` seam with
+   a single-node default and a **Redis pub/sub** implementation for cross-node
+   room fan-out (`ADATP_BACKPLANE_URL`, `server/src/backplane.rs`), verified with
+   a two-node cross-node test ([`tests/backplane/`](tests/backplane/)). `ha.md`
+   now describes real, tested behaviour. **Remaining:** cross-node presence/
+   membership, and stronger delivery than best-effort (Redis Streams / NATS
+   JetStream) for at-least-once.
 2. **Published benchmarks.** p50/p95/p99 at 10k/50k concurrent connections, CPU,
    RAM, reconnect-storm behaviour — from the harness now in the repo, with the
    reproduce script. Numbers on the README's first screen.
