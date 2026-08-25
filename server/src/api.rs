@@ -31,6 +31,9 @@ pub struct AppState {
     pub plugins: Arc<PluginManager>,
     pub webhooks: Arc<WebhookManager>,
     pub load: Arc<LoadTracker>,
+    /// Long-term Ed25519 identity for the v2 authenticated handshake; its
+    /// public key is what clients pin. Present but unused on v1-only traffic.
+    pub identity: Arc<crate::identity::ServerIdentity>,
     pub logs: &'static BufLogger,
     pub admin_token: String,
     /// When true, /readyz reports 503 and new WebSocket connections are

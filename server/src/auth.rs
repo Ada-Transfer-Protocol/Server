@@ -267,6 +267,7 @@ mod tests {
             room_allowlist: Vec::new(),
             room_protected_prefix: None,
             room_protected_role: "admin".into(),
+            identity_path: "adatp-identity.key".into(),
         }
     }
 

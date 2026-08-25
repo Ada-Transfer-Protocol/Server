@@ -48,6 +48,11 @@ pub struct Config {
     /// Role required to join `room_protected_prefix` rooms. `ROOM_PROTECTED_ROLE`,
     /// default `admin`.
     pub room_protected_role: String,
+    /// File holding the server's long-term Ed25519 identity seed for the v2
+    /// authenticated handshake. `ADATP_IDENTITY_PATH`, default
+    /// `adatp-identity.key`. Generated (0600) on first boot; its public key is
+    /// what clients pin. Unused on v1-only deployments.
+    pub identity_path: String,
 }
 
 impl Config {
@@ -130,6 +135,9 @@ impl Config {
         let room_protected_role =
             env::var("ROOM_PROTECTED_ROLE").unwrap_or_else(|_| "admin".to_string());
 
+        let identity_path =
+            env::var("ADATP_IDENTITY_PATH").unwrap_or_else(|_| "adatp-identity.key".to_string());
+
         Self {
             host,
             port,
@@ -145,6 +153,7 @@ impl Config {
             room_allowlist,
             room_protected_prefix,
             room_protected_role,
+            identity_path,
         }
     }
 
@@ -194,6 +203,7 @@ mod tests {
             room_allowlist: Vec::new(),
             room_protected_prefix: None,
             room_protected_role: "admin".into(),
+            identity_path: "adatp-identity.key".into(),
         }
     }
 

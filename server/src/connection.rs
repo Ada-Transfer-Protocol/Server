@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use adatp_core::crypto::key_derivation::SessionKeys;
 use adatp_core::crypto::x25519::{diffie_hellman, KeyPair};
+use adatp_core::session::handshake_v2;
 use adatp_core::session::secure_session::{Role, SecureSession};
 use adatp_core::{MessageType, Packet, PacketFlags};
 
@@ -100,6 +101,11 @@ struct ConnState {
     session_id: Option<Uuid>,
     /// Present once a HandshakeInit with a valid X25519 key was answered.
     secure: Option<SecureSession>,
+    /// For a **v2** (authenticated) handshake: the transcript hash the server
+    /// signed, kept so the client's encrypted `HandshakeComplete` can be checked
+    /// to confirm the same key/transcript (key confirmation). `None` for a v1
+    /// handshake, which has no such confirmation step.
+    pending_v2_th: Option<[u8; 32]>,
     /// True once HandshakeComplete decrypted successfully; from then on all
     /// server->client packets are encrypted.
     secure_established: bool,
@@ -117,6 +123,7 @@ impl ConnState {
         Self {
             session_id: None,
             secure: None,
+            pending_v2_th: None,
             secure_established: false,
             authed: None,
             hub_id: None,
@@ -358,18 +365,54 @@ async fn handle_packet(
                 return Flow::Close("handshake_replay");
             }
             if packet.payload.len() >= 32 {
-                // X25519 key agreement with a real ephemeral server key.
-                let kp = KeyPair::generate();
-                let server_pub = *kp.public.as_bytes();
-                match diffie_hellman(kp.secret, &packet.payload[..32]) {
-                    Ok(shared) => {
-                        let keys = SessionKeys::derive(&shared, &KDF_SALT);
-                        conn.secure = Some(SecureSession::new(Role::Server, keys));
-                        if !send_direct(state, conn, ws_tx, MessageType::HandshakeResponse, &server_pub).await {
-                            return Flow::Close("write_error");
+                let mut epk_c = [0u8; 32];
+                epk_c.copy_from_slice(&packet.payload[..32]);
+
+                if packet.header.version >= handshake_v2::PROTOCOL_V2 {
+                    // ---- Protocol v2: authenticated handshake ----
+                    // The server signs the transcript (which binds both
+                    // ephemerals + its identity) with its long-term Ed25519 key;
+                    // a client that pinned spk_S verifies before deriving keys.
+                    // This is the ProVerif-verified flow that closes v1's MITM
+                    // (docs/spec/12-authenticated-handshake.md + docs/spec/formal/).
+                    match handshake_v2::server_respond(state.identity.keypair(), &epk_c, &KDF_SALT) {
+                        Ok(sh) => {
+                            conn.secure = Some(SecureSession::new(Role::Server, sh.keys));
+                            // Remember th to verify the client's encrypted
+                            // HandshakeComplete confirmation.
+                            conn.pending_v2_th = Some(sh.transcript_hash);
+                            // Signed ServerHello (epk_s || spk_s || sig), stamped
+                            // version=2 so the peer sees the negotiated protocol.
+                            let sid = conn.sid();
+                            let mut pkt = Packet::new(
+                                MessageType::HandshakeResponse,
+                                Bytes::from(sh.response),
+                                sid,
+                            );
+                            pkt.header.version = handshake_v2::PROTOCOL_V2;
+                            pkt.header.length = pkt.payload.len() as u32;
+                            let bytes = pkt.to_bytes().to_vec();
+                            state.metrics.add_tx(bytes.len() as u64);
+                            if ws_tx.send(Message::Binary(bytes)).await.is_err() {
+                                return Flow::Close("write_error");
+                            }
                         }
+                        Err(_) => return Flow::Close("bad_handshake_key"),
                     }
-                    Err(_) => return Flow::Close("bad_handshake_key"),
+                } else {
+                    // ---- Protocol v1: unauthenticated X25519 (unchanged) ----
+                    let kp = KeyPair::generate();
+                    let server_pub = *kp.public.as_bytes();
+                    match diffie_hellman(kp.secret, &epk_c) {
+                        Ok(shared) => {
+                            let keys = SessionKeys::derive(&shared, &KDF_SALT);
+                            conn.secure = Some(SecureSession::new(Role::Server, keys));
+                            if !send_direct(state, conn, ws_tx, MessageType::HandshakeResponse, &server_pub).await {
+                                return Flow::Close("write_error");
+                            }
+                        }
+                        Err(_) => return Flow::Close("bad_handshake_key"),
+                    }
                 }
             } else {
                 // Plaintext-mode hello (e.g. "AdaTP v1.0"): acknowledge without
@@ -382,16 +425,26 @@ async fn handle_packet(
         }
 
         MessageType::HandshakeComplete => {
-            if let Some(secure) = conn.secure.as_mut() {
-                if packet.header.flags.contains(PacketFlags::ENCRYPTED) {
-                    match secure.decrypt(&packet) {
-                        Ok(_) => {
-                            conn.secure_established = true;
-                            debug!("Secure session established for {remote}");
-                        }
+            if packet.header.flags.contains(PacketFlags::ENCRYPTED) {
+                // Decrypt the client's confirmation under the freshly derived key.
+                let plaintext = match conn.secure.as_mut() {
+                    Some(secure) => match secure.decrypt(&packet) {
+                        Ok(p) => p,
                         Err(_) => return Flow::Close("handshake_verify_failed"),
+                    },
+                    None => return Flow::Close("handshake_verify_failed"),
+                };
+                // For a v2 handshake the confirmation MUST be Finished =
+                // FINISHED_LABEL || th, proving the client derived the same key
+                // for the same signed transcript (key confirmation). v1 has no
+                // such step, so this check is skipped there.
+                if let Some(th) = conn.pending_v2_th {
+                    if !handshake_v2::verify_finished(&th, &plaintext) {
+                        return Flow::Close("handshake_verify_failed");
                     }
                 }
+                conn.secure_established = true;
+                debug!("Secure session established for {remote}");
             }
             Flow::Continue
         }

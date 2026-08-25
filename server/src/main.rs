@@ -12,6 +12,7 @@ mod config;
 mod connection;
 mod db;
 mod hub;
+mod identity;
 mod load;
 mod logging;
 mod metrics;
@@ -86,6 +87,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let load = load::LoadTracker::start(metrics.clone(), hub.clone());
     let admin_token = admin::resolve_admin_token();
 
+    // Long-term identity for the v2 authenticated handshake (generated on first
+    // boot). Loaded even on v1-only deployments, where it is simply unused.
+    let identity = match identity::ServerIdentity::load_or_create(&cfg.identity_path) {
+        Ok(id) => {
+            info!(
+                "server identity (Ed25519, for v2 handshake pinning): {} [{}]",
+                id.fingerprint(),
+                cfg.identity_path
+            );
+            Arc::new(id)
+        }
+        Err(e) => {
+            eprintln!("FATAL: could not load/create server identity at {}: {e}", cfg.identity_path);
+            std::process::exit(1);
+        }
+    };
+
     let state = Arc::new(AppState {
         metrics,
         db,
@@ -95,6 +113,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         plugins: plugins.clone(),
         webhooks,
         load,
+        identity,
         logs,
         admin_token,
         draining: std::sync::atomic::AtomicBool::new(false),
