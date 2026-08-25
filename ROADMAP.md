@@ -133,21 +133,31 @@ about. Sequence:
    (`docs/spec/formal/adatp_v2_downgrade.pv`: a pinning client completes only via
    v2). Remaining: expert review + an independent audit (the paid tier-9 item).
    Symbolic ≠ audited.
-4. **Implement** — **server + first client done, verified end-to-end**:
+4. **Implement** — **server + five SDKs done, verified end-to-end**:
    `handshake_v2.rs` + `connection.rs` negotiate v2 on `version>=2` (persistent
    Ed25519 identity, v1 untouched); the **header is bound as AEAD AAD** in v2;
-   `ADATP_MIN_PROTOCOL_VERSION=2` enforces the authenticated handshake; the
-   **Node SDK** implements the v2 client (pin + verify + Finished + AAD) and a
-   live Node↔Rust e2e test passes (handshake, AAD round-trip, wrong-pin reject,
-   downgrade-floor reject). Conformance vectors published + machine-checked in
-   both languages. **Remaining**: a **C** reference client (measures the MCU
-   cost), then the other SDKs (Python, PHP, browser-JS, Arduino).
-5. Update the security claims **last** — after the SDK fleet speaks v2 and an
-   audit lands.
+   `ADATP_MIN_PROTOCOL_VERSION=2` enforces the authenticated handshake. Five
+   independent clients now implement v2 (pin + signature verify + Finished +
+   AAD) and each passes a live e2e handshake + AAD round-trip against this
+   server, plus golden-vector conformance in CI:
+   **Node, C, Python, PHP** (and the Rust reference). Vectors are machine-checked
+   in every language.
+   **Remaining SDKs, with honest reasons:**
+   - **browser-JS** (`js/`): plaintext-over-`wss` by design — it has no session
+     crypto and delegates confidentiality/authentication to TLS. v2 targets peers
+     that *cannot* run TLS; a browser always can, so v2 is intentionally not
+     implemented there (not a gap).
+   - **Arduino/ESP32**: has X25519+GCM via mbedTLS, but stock ESP32 mbedTLS ships
+     **no EdDSA**, so Ed25519 signature verification needs an added
+     implementation; and it cannot be built/hardware-tested in this environment.
+     Deferred rather than shipped unverified.
+5. Update the security claims **last** — after the fleet is complete and an audit
+   lands.
 
-The server reference implementation exists, but **no SDK client speaks v2 yet**,
-so end-to-end it is unproven and **TLS stays mandatory**. v2 is real code behind
-version negotiation — concrete and checkable — not yet a shipped guarantee.
+Five interoperating implementations speak v2 end-to-end (server + Node + C +
+Python + PHP), formally checked and conformance-tested. But TLS remains the
+**blanket** recommendation until the story is complete per-deployment (the client
+must speak v2 + pin + set the floor) and an independent audit is done.
 
 ## Tier 11 — the embedded-first bet (the actual goal)
 

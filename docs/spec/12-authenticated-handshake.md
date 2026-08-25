@@ -1,23 +1,26 @@
 # 12 — Authenticated Handshake (Protocol v2)
 
-> **Status: IMPLEMENTED (server + Node SDK), verified end-to-end and in the
-> symbolic model — audit pending, SDK fleet incomplete.** This chapter specifies
+> **Status: IMPLEMENTED (server + 4 SDKs), verified end-to-end and in the
+> symbolic model — audit pending, 2 SDKs intentionally out of scope / deferred.**
+> This chapter specifies
 > an *authenticated* key exchange for AdaTP protocol **version 2**. ProVerif
 > confirms, against an active attacker: secrecy + no-MITM for v2, the MITM for
 > unauthenticated v1, and **no silent version downgrade**
 > ([`formal/RESULTS.md`](./formal/RESULTS.md)). The **server**
 > (`core/src/session/handshake_v2.rs` + `server/src/connection.rs`) negotiates it
 > on `version>=2` (v1 path **unchanged**), binds the header as AEAD **AAD** (§3),
-> and can **require** v2 via `ADATP_MIN_PROTOCOL_VERSION=2`. The **Node SDK**
-> implements the v2 client (pin + signature verify + Finished + AAD); a live
-> Node↔Rust test passes the handshake, an AAD-bound round-trip, wrong-pin
-> rejection, and the downgrade floor. Golden vectors
+> and can **require** v2 via `ADATP_MIN_PROTOCOL_VERSION=2`. **Five independent
+> clients now speak v2** end to end
+> (Node, C, Python, PHP + the Rust reference) — each passes a live handshake, an
+> AAD-bound round-trip, and wrong-pin/downgrade rejection, plus golden-vector
+> conformance
 > ([`../../tests/conformance/vectors/adatp-v2-handshake-vectors.json`](../../tests/conformance/vectors/adatp-v2-handshake-vectors.json))
-> are machine-checked in both languages. What is *not* done: **the other SDKs
-> (C, Python, PHP, browser-JS, Arduino) do not speak v2 yet**, and there is **no
-> independent audit**. A deployment is MITM-resistant without TLS only when its
-> client speaks v2, pins the key, and sets the floor to 2; until the fleet does,
-> **TLS remains the blanket recommendation**. See
+> in CI. What is *not* done: **browser-JS** is plaintext-over-`wss` by design
+> (TLS-delegated; v2 intentionally out of scope) and **Arduino/ESP32** is
+> deferred (stock ESP32 mbedTLS has no EdDSA); and there is **no independent
+> audit**. A deployment is MITM-resistant without TLS only when its client speaks
+> v2, pins the key, and sets the floor to 2; until that is the norm, **TLS
+> remains the blanket recommendation**. See
 > [`../SECURITY_MODEL.md`](../SECURITY_MODEL.md) §11.
 
 ## 1. Why
@@ -164,10 +167,18 @@ vectors), the honest posture remains **TLS-mandatory**
    the v1 path untouched; a persistent Ed25519 identity is generated on first
    boot; v2 conformance vectors published and machine-checked against the
    reference. *(Optional Tamarin cross-check still open.)*
-3. ⬜ **One reference SDK (JS *and* C — the C one proves the MCU claim)**
-   implements v2 + key pinning; this is where the first true end-to-end,
-   socket-level v2 test lands. Measure the added handshake cost on an STM32.
-4. ⬜ Remaining SDKs follow, each replaying the new vectors.
-5. ⬜ Only then update the security claims and README.
+3. ✅ **Reference SDK clients + end-to-end tests.** Five independent clients
+   implement v2 + key pinning + header-AAD and each passes a live handshake +
+   encrypted round-trip against the server, plus golden-vector conformance in CI:
+   **Node, C, Python, PHP** (and the Rust reference). Each replays the shared
+   vectors byte-for-byte.
+4. 🟡 **Remaining SDKs.** *browser-JS* is plaintext-over-`wss` by design (no
+   session crypto; TLS-delegated) — v2 targets non-TLS peers, so it is
+   intentionally out of scope there. *Arduino/ESP32* has X25519+GCM (mbedTLS) but
+   stock ESP32 mbedTLS ships no EdDSA, so Ed25519 verify needs an added
+   implementation and a hardware test; deferred rather than shipped unverified.
+   (Measuring the handshake cost on an STM32/ESP32 is the open MCU-proof item.)
+5. ⬜ Update the top-level security claims only after the fleet is complete and
+   an audit lands.
 
-*Steps 1–2 are done; a security *claim* still waits on 3–5 plus an audit.*
+*Steps 1–3 are done; the security *claim* still waits on 4–5 plus an audit.*
