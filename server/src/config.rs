@@ -60,6 +60,11 @@ pub struct Config {
     /// The default stays 1 for backward compatibility until every SDK speaks v2;
     /// production on an untrusted network should set 2 (and pin the server key).
     pub min_protocol_version: u8,
+    /// Redis pub/sub URL for the multi-node routing backplane.
+    /// `ADATP_BACKPLANE_URL` (e.g. `redis://127.0.0.1:6379`). Unset = single-node
+    /// (rooms route in-process only). When set, room broadcasts also fan out to
+    /// every other node subscribed to the same Redis, so rooms span the fleet.
+    pub backplane_url: Option<String>,
 }
 
 impl Config {
@@ -150,6 +155,10 @@ impl Config {
             .parse()
             .expect("ADATP_MIN_PROTOCOL_VERSION must be a number (1 or 2)");
 
+        let backplane_url = env::var("ADATP_BACKPLANE_URL")
+            .ok()
+            .filter(|s| !s.is_empty());
+
         Self {
             host,
             port,
@@ -167,6 +176,7 @@ impl Config {
             room_protected_role,
             identity_path,
             min_protocol_version,
+            backplane_url,
         }
     }
 
@@ -216,6 +226,7 @@ mod tests {
             room_protected_role: "admin".into(),
             identity_path: "adatp-identity.key".into(),
             min_protocol_version: 1,
+            backplane_url: None,
         }
     }
 

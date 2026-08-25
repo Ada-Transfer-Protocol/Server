@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -74,6 +75,10 @@ pub struct Hub {
     rooms: DashMap<String, HashSet<ConnId>>,
     /// Messages dropped because a receiver's queue was full (backpressure).
     pub dropped_msgs: AtomicU64,
+    /// When a multi-node backplane is active, room broadcasts are also forwarded
+    /// here (room, msg) so the backplane can publish them to other nodes. Unset
+    /// on a single-node deployment — then `broadcast` is purely in-process.
+    publish_tx: OnceLock<mpsc::Sender<(String, RouteMsg)>>,
 }
 
 impl Hub {
@@ -83,6 +88,46 @@ impl Hub {
             conns: DashMap::new(),
             rooms: DashMap::new(),
             dropped_msgs: AtomicU64::new(0),
+            publish_tx: OnceLock::new(),
+        }
+    }
+
+    /// Wire the multi-node backplane's publish channel. Called once at startup
+    /// when `ADATP_BACKPLANE_URL` is set; a no-op if already set.
+    pub fn set_publisher(&self, tx: mpsc::Sender<(String, RouteMsg)>) {
+        let _ = self.publish_tx.set(tx);
+    }
+
+    /// Forward a broadcast to the backplane (other nodes), if one is active.
+    fn forward_to_backplane(&self, room: &str, msg: &RouteMsg) {
+        if let Some(tx) = self.publish_tx.get() {
+            // Non-blocking: if the backplane queue is full, drop (counted) rather
+            // than stall the hot path. Cross-node delivery is best-effort, same
+            // as the local queues.
+            if tx.try_send((room.to_string(), msg.clone())).is_err() {
+                self.dropped_msgs.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Deliver `msg` to local members of `room`, optionally skipping `except`.
+    /// This is the in-process delivery used by every broadcast path; it never
+    /// touches the backplane.
+    fn deliver_local(&self, room: &str, msg: &RouteMsg, except: Option<ConnId>) {
+        let member_ids: Vec<ConnId> = match self.rooms.get(room) {
+            Some(members) => members
+                .iter()
+                .copied()
+                .filter(|id| Some(*id) != except)
+                .collect(),
+            None => return,
+        };
+        for id in member_ids {
+            if let Some(entry) = self.conns.get(&id) {
+                if entry.tx.try_send(OutEvent::Route(msg.clone())).is_err() {
+                    self.dropped_msgs.fetch_add(1, Ordering::Relaxed);
+                }
+            }
         }
     }
 
@@ -144,36 +189,27 @@ impl Hub {
     }
 
     /// Deliver `msg` to every member of `room`, including the sender
-    /// (clients rely on their own echo, e.g. for RTT measurement).
+    /// (clients rely on their own echo, e.g. for RTT measurement), and forward
+    /// it to the backplane so members on other nodes receive it too.
     /// Slow consumers whose queues are full lose the message (counted).
     pub fn broadcast(&self, room: &str, msg: RouteMsg) {
-        let member_ids: Vec<ConnId> = match self.rooms.get(room) {
-            Some(members) => members.iter().copied().collect(),
-            None => return,
-        };
-        for id in member_ids {
-            if let Some(entry) = self.conns.get(&id) {
-                if entry.tx.try_send(OutEvent::Route(msg.clone())).is_err() {
-                    self.dropped_msgs.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        }
+        self.deliver_local(room, &msg, None);
+        self.forward_to_backplane(room, &msg);
     }
 
-    /// Like `broadcast`, but skips `except` (e.g. join announcements that the
-    /// joiner should not receive about itself).
+    /// Like `broadcast`, but skips `except` locally (e.g. a join announcement the
+    /// joiner should not receive about itself). The backplane forward carries no
+    /// exception — on other nodes the excepted connection does not exist, so all
+    /// their room members receive it.
     pub fn broadcast_except(&self, room: &str, msg: RouteMsg, except: ConnId) {
-        let member_ids: Vec<ConnId> = match self.rooms.get(room) {
-            Some(members) => members.iter().copied().filter(|id| *id != except).collect(),
-            None => return,
-        };
-        for id in member_ids {
-            if let Some(entry) = self.conns.get(&id) {
-                if entry.tx.try_send(OutEvent::Route(msg.clone())).is_err() {
-                    self.dropped_msgs.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        }
+        self.deliver_local(room, &msg, Some(except));
+        self.forward_to_backplane(room, &msg);
+    }
+
+    /// Deliver a message that arrived **from the backplane** to local members
+    /// only — never re-published, so there is no cross-node loop.
+    pub fn broadcast_local(&self, room: &str, msg: RouteMsg) {
+        self.deliver_local(room, &msg, None);
     }
 
     pub fn connection_count(&self) -> usize {

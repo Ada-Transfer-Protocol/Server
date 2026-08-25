@@ -8,6 +8,7 @@ use log::info;
 mod admin;
 mod api;
 mod auth;
+mod backplane;
 mod config;
 mod connection;
 mod db;
@@ -106,6 +107,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
             std::process::exit(1);
         }
     };
+
+    // Optional multi-node routing backplane (Redis pub/sub). When configured, a
+    // room broadcast fans out to every node on the same Redis, so rooms span the
+    // fleet. Unset = single-node (in-process routing only). Fail-closed: if the
+    // operator asked for a backplane and it can't connect, refuse to start.
+    if let Some(url) = &cfg.backplane_url {
+        match backplane::Backplane::start(url, hub.clone()).await {
+            Ok(bp) => info!(
+                "multi-node backplane active via {} (node {})",
+                url,
+                bp.node_id()
+            ),
+            Err(e) => {
+                eprintln!("FATAL: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
 
     let state = Arc::new(AppState {
         metrics,

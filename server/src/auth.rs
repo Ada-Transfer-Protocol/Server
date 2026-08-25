@@ -263,6 +263,7 @@ mod tests {
             room_protected_role: "admin".into(),
             identity_path: "adatp-identity.key".into(),
             min_protocol_version: 1,
+            backplane_url: None,
         }
     }
 
