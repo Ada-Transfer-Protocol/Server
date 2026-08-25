@@ -112,19 +112,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // room broadcast fans out to every node on the same Redis, so rooms span the
     // fleet. Unset = single-node (in-process routing only). Fail-closed: if the
     // operator asked for a backplane and it can't connect, refuse to start.
-    if let Some(url) = &cfg.backplane_url {
+    let backplane = if let Some(url) = &cfg.backplane_url {
         match backplane::Backplane::start(url, hub.clone()).await {
-            Ok(bp) => info!(
-                "multi-node backplane active via {} (node {})",
-                url,
-                bp.node_id()
-            ),
+            Ok(bp) => {
+                info!(
+                    "multi-node backplane active via {} (node {})",
+                    url,
+                    bp.node_id()
+                );
+                Some(bp)
+            }
             Err(e) => {
                 eprintln!("FATAL: {e}");
                 std::process::exit(1);
             }
         }
-    }
+    } else {
+        None
+    };
 
     let state = Arc::new(AppState {
         metrics,
@@ -136,6 +141,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         webhooks,
         load,
         identity,
+        backplane,
         logs,
         admin_token,
         draining: std::sync::atomic::AtomicBool::new(false),

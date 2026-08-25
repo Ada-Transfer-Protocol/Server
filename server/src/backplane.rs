@@ -37,11 +37,17 @@ const CHANNEL: &str = "adatp:route";
 /// (they live for the process); it exists mainly to expose the node id.
 pub struct Backplane {
     node_id: Uuid,
+    addr: String,
 }
 
 impl Backplane {
     pub fn node_id(&self) -> Uuid {
         self.node_id
+    }
+
+    /// The resolved Redis address (`host:port`) this node's backplane uses.
+    pub fn addr(&self) -> &str {
+        &self.addr
     }
 
     /// Connect to Redis at `url` (`redis://host:port`, or `host:port`), wire the
@@ -63,9 +69,9 @@ impl Backplane {
         tokio::spawn(publisher_task(addr.clone(), node_id, pub_stream, rx));
 
         // Subscriber: SUBSCRIBE and re-deliver others' messages to local conns.
-        tokio::spawn(subscriber_task(addr, node_id, hub));
+        tokio::spawn(subscriber_task(addr.clone(), node_id, hub));
 
-        Ok(Arc::new(Self { node_id }))
+        Ok(Arc::new(Self { node_id, addr }))
     }
 }
 

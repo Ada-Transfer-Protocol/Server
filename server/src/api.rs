@@ -34,6 +34,10 @@ pub struct AppState {
     /// Long-term Ed25519 identity for the v2 authenticated handshake; its
     /// public key is what clients pin. Present but unused on v1-only traffic.
     pub identity: Arc<crate::identity::ServerIdentity>,
+    /// The multi-node routing backplane, when `ADATP_BACKPLANE_URL` is set.
+    /// `None` on a single-node deployment. Exposed via `/status` so the control
+    /// plane (and operators) can see whether a node is on a backplane.
+    pub backplane: Option<Arc<crate::backplane::Backplane>>,
     pub logs: &'static BufLogger,
     pub admin_token: String,
     /// When true, /readyz reports 503 and new WebSocket connections are
@@ -112,12 +116,24 @@ async fn readyz_handler(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
+fn backplane_status(state: &AppState) -> serde_json::Value {
+    match &state.backplane {
+        Some(bp) => json!({
+            "enabled": true,
+            "node_id": bp.node_id().to_string(),
+            "redis": bp.addr(),
+        }),
+        None => json!({ "enabled": false }),
+    }
+}
+
 async fn status_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(json!({
         "status": "ok",
         "service": "adatp-server",
         "auth_driver": state.auth.driver_name(),
         "connections": state.hub.connection_count(),
+        "backplane": backplane_status(&state),
     }))
 }
 
@@ -135,6 +151,7 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> Json<serde_json:
             .hub
             .dropped_msgs
             .load(std::sync::atomic::Ordering::Relaxed),
+        "backplane": backplane_status(&state),
     }))
 }
 
