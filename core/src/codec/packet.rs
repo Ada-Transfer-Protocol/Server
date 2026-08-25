@@ -157,6 +157,30 @@ impl Default for PacketHeader {
     }
 }
 
+impl PacketHeader {
+    /// The 45-byte header, serialized exactly as it appears on the wire.
+    ///
+    /// Used for framing (via [`Packet::to_bytes`]) and, in **protocol v2**, as
+    /// the AEAD **additional authenticated data**: binding these bytes to the
+    /// ciphertext tag means `msg_type`, `sequence`, `session_id`, `flags`, etc.
+    /// cannot be altered by an on-path attacker without failing decryption
+    /// (v1 uses empty AAD and is unaffected). Both peers derive identical bytes:
+    /// the sender knows every field before sealing (GCM adds no length), and the
+    /// receiver re-serializes the header it parsed off the wire.
+    pub fn header_bytes(&self) -> [u8; HEADER_SIZE] {
+        let mut buf = [0u8; HEADER_SIZE];
+        buf[0..4].copy_from_slice(&self.magic.to_le_bytes());
+        buf[4] = self.version;
+        buf[5..7].copy_from_slice(&self.flags.bits().to_le_bytes());
+        buf[7..11].copy_from_slice(&self.length.to_le_bytes());
+        buf[11..19].copy_from_slice(&self.sequence.to_le_bytes());
+        buf[19..21].copy_from_slice(&(self.msg_type as u16).to_le_bytes());
+        buf[21..29].copy_from_slice(&self.timestamp.to_le_bytes());
+        buf[29..45].copy_from_slice(self.session_id.as_bytes());
+        buf
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Packet {
     pub header: PacketHeader,
@@ -180,16 +204,9 @@ impl Packet {
 
     pub fn to_bytes(&self) -> Bytes {
         let mut buf = Vec::with_capacity(HEADER_SIZE + self.payload.len() + if self.auth_tag.is_some() { 16 } else { 0 });
-        
-        // Write Header
-        buf.put_u32_le(self.header.magic);
-        buf.put_u8(self.header.version);
-        buf.put_u16_le(self.header.flags.bits());
-        buf.put_u32_le(self.header.length);
-        buf.put_u64_le(self.header.sequence);
-        buf.put_u16_le(self.header.msg_type as u16);
-        buf.put_u64_le(self.header.timestamp);
-        buf.put_slice(self.header.session_id.as_bytes());
+
+        // Write Header (identical bytes are used as the v2 AEAD AAD).
+        buf.put_slice(&self.header.header_bytes());
 
         // Write Payload
         buf.put_slice(&self.payload);

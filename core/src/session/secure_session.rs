@@ -1,5 +1,5 @@
 use crate::crypto::{aes_gcm::Cipher, key_derivation::SessionKeys};
-use crate::codec::packet::{Packet, PacketFlags};
+use crate::codec::packet::{Packet, PacketFlags, PacketHeader};
 use crate::crypto::CryptoError;
 
 pub enum Role {
@@ -12,14 +12,30 @@ pub struct SecureSession {
     keys: SessionKeys,
     cipher_client: Cipher,
     cipher_server: Cipher,
-    
+
     // Sequence numbers strictly increasing
     my_sequence: u64,
     peer_sequence: u64,
+
+    /// When true (protocol **v2**), the 45-byte frame header is bound as the
+    /// AEAD additional authenticated data, so header fields (msg_type, sequence,
+    /// session_id, flags…) are tamper-evident. v1 sessions use empty AAD, which
+    /// keeps their golden vectors byte-identical.
+    bind_aad: bool,
 }
 
 impl SecureSession {
+    /// A v1 session: empty AAD (wire-compatible with the v1 golden vectors).
     pub fn new(role: Role, keys: SessionKeys) -> Self {
+        Self::with_aad(role, keys, false)
+    }
+
+    /// A **v2** session: the frame header is authenticated as AEAD AAD.
+    pub fn new_v2(role: Role, keys: SessionKeys) -> Self {
+        Self::with_aad(role, keys, true)
+    }
+
+    fn with_aad(role: Role, keys: SessionKeys, bind_aad: bool) -> Self {
         let cipher_client = Cipher::new(keys.client_write_key);
         let cipher_server = Cipher::new(keys.server_write_key);
 
@@ -30,27 +46,39 @@ impl SecureSession {
             cipher_server,
             my_sequence: 1, // Start from 1, 0 might be used for handshake packets if unencrypted
             peer_sequence: 1,
+            bind_aad,
         }
     }
 
-    // Encrypts a payload and prepares the packet parameters (like IV generation)
-    // Returns (EncryptedPayload, AuthTag, SequenceUsed)
-    pub fn encrypt(&mut self, plaintext: &[u8]) -> Result<(Vec<u8>, [u8; 16], u64), CryptoError> {
+    /// Encrypts `plaintext` for the frame described by `header`. Fills in
+    /// `header.sequence`, `header.length` and the `ENCRYPTED` flag; for a v2
+    /// session the finalized header is bound as AEAD AAD (so it cannot be
+    /// altered in flight). Returns `(ciphertext, tag)`; the sequence used is
+    /// left in `header.sequence`.
+    ///
+    /// IV = IV_root XOR sequence in the low 8 bytes (spec 08-security), same
+    /// construction as v1.
+    pub fn encrypt(
+        &mut self,
+        plaintext: &[u8],
+        header: &mut PacketHeader,
+    ) -> Result<(Vec<u8>, [u8; 16]), CryptoError> {
         let seq = self.my_sequence;
-        // IV = IV_Root XOR Sequence (8 bytes + padding? Or just XOR last 8 bytes?)
-        // Spec says: IV = IV_Root XOR Sequence
-        // IV Root is 12 bytes. Sequence is 8 bytes.
-        // Let's XOR the last 8 bytes of IV Root with Sequence.
-        
+        header.sequence = seq;
+        header.length = plaintext.len() as u32;
+        header.flags |= PacketFlags::ENCRYPTED;
+
         let iv = self.compute_iv(seq, &self.role);
-        
+        let aad_bytes = header.header_bytes();
+        let aad: &[u8] = if self.bind_aad { &aad_bytes } else { &[] };
+
         let (ciphertext, tag) = match self.role {
-            Role::Client => self.cipher_client.encrypt(&iv, plaintext, &[])?,
-            Role::Server => self.cipher_server.encrypt(&iv, plaintext, &[])?,
+            Role::Client => self.cipher_client.encrypt(&iv, plaintext, aad)?,
+            Role::Server => self.cipher_server.encrypt(&iv, plaintext, aad)?,
         };
-        
+
         self.my_sequence += 1;
-        Ok((ciphertext, tag, seq))
+        Ok((ciphertext, tag))
     }
 
     // Decrypts a packet payload
@@ -84,9 +112,14 @@ impl SecureSession {
         let iv = self.compute_iv(seq, &peer_role);
         let tag = packet.auth_tag.ok_or(CryptoError::EncryptionError)?; // Tag missing
 
+        // v2 binds the received header as AAD: any tampering with msg_type,
+        // sequence, session_id or flags fails the tag below. v1 uses empty AAD.
+        let aad_bytes = packet.header.header_bytes();
+        let aad: &[u8] = if self.bind_aad { &aad_bytes } else { &[] };
+
         let plaintext = match self.role {
-            Role::Client => self.cipher_server.decrypt(&iv, &packet.payload, &tag, &[])?,
-            Role::Server => self.cipher_client.decrypt(&iv, &packet.payload, &tag, &[])?,
+            Role::Client => self.cipher_server.decrypt(&iv, &packet.payload, &tag, aad)?,
+            Role::Server => self.cipher_client.decrypt(&iv, &packet.payload, &tag, aad)?,
         };
 
         // Authenticated successfully — advance the replay window past this seq.
@@ -116,12 +149,12 @@ impl SecureSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::packet::{MessageType, Packet, PacketFlags};
+    use crate::codec::packet::{MessageType, Packet};
     use crate::crypto::key_derivation::SessionKeys;
     use bytes::Bytes;
     use uuid::Uuid;
 
-    /// A matched client/server pair derived from the same shared secret.
+    /// A matched v1 client/server pair derived from the same shared secret.
     fn pair() -> (SecureSession, SecureSession) {
         let secret = [7u8; 32];
         let client = SecureSession::new(Role::Client, SessionKeys::derive(&secret, &[0u8; 32]));
@@ -129,13 +162,21 @@ mod tests {
         (client, server)
     }
 
-    /// Encrypt `msg` on the client and wrap it into a wire packet.
+    /// A matched **v2** pair (header bound as AAD).
+    fn pair_v2() -> (SecureSession, SecureSession) {
+        let secret = [7u8; 32];
+        let client = SecureSession::new_v2(Role::Client, SessionKeys::derive(&secret, &[0u8; 32]));
+        let server = SecureSession::new_v2(Role::Server, SessionKeys::derive(&secret, &[0u8; 32]));
+        (client, server)
+    }
+
+    /// Encrypt `msg` on the client and wrap it into a wire packet. The header
+    /// the session finalized (and, for v2, authenticated) travels with the
+    /// packet, exactly as it would on the wire.
     fn seal(client: &mut SecureSession, msg: &[u8]) -> Packet {
-        let (ct, tag, seq) = client.encrypt(msg).unwrap();
-        let mut p = Packet::new(MessageType::TextMessage, Bytes::from(ct), Uuid::nil());
-        p.header.flags |= PacketFlags::ENCRYPTED;
-        p.header.sequence = seq;
-        p.header.length = p.payload.len() as u32;
+        let mut p = Packet::new(MessageType::TextMessage, Bytes::new(), Uuid::nil());
+        let (ct, tag) = client.encrypt(msg, &mut p.header).unwrap();
+        p.payload = Bytes::from(ct);
         p.auth_tag = Some(tag);
         p
     }
@@ -183,5 +224,34 @@ mod tests {
         assert!(server.decrypt(&forged).is_err(), "forged tag must fail to decrypt");
         // The genuine seq-1 packet is still accepted afterwards.
         assert_eq!(server.decrypt(&good).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn v2_binds_header_as_aad_v1_does_not() {
+        // v2: an unmodified packet decrypts...
+        let (mut c2, mut s2) = pair_v2();
+        let p = seal(&mut c2, b"payload"); // seq 1
+        assert_eq!(s2.decrypt(&p).unwrap(), b"payload");
+
+        // ...but tampering the msg_type in the header fails the tag, because the
+        // header is the AEAD AAD in v2. (The payload/IV are untouched — only the
+        // header changed — so this isolates the AAD binding.)
+        let mut tampered = seal(&mut c2, b"again"); // seq 2
+        tampered.header.msg_type = MessageType::Disconnect;
+        assert!(
+            s2.decrypt(&tampered).is_err(),
+            "v2 must reject a packet whose header was altered in flight"
+        );
+
+        // v1 contrast: the SAME tamper still decrypts, because v1 uses empty AAD
+        // and does not authenticate the header. This is exactly the gap v2 closes.
+        let (mut c1, mut s1) = pair();
+        let mut q = seal(&mut c1, b"payload");
+        q.header.msg_type = MessageType::Disconnect;
+        assert_eq!(
+            s1.decrypt(&q).unwrap(),
+            b"payload",
+            "v1 does not bind the header (documents the pre-v2 gap)"
+        );
     }
 }

@@ -55,12 +55,6 @@ impl ServerIdentity {
         Ok(Self { keypair })
     }
 
-    /// Build an in-memory identity that is **not** persisted — for tests.
-    #[cfg(test)]
-    pub fn ephemeral() -> Self {
-        Self { keypair: SigningKeyPair::generate() }
-    }
-
     pub fn keypair(&self) -> &SigningKeyPair {
         &self.keypair
     }

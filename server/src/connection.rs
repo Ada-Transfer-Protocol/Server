@@ -271,11 +271,11 @@ fn encode_for_peer(
 ) -> Vec<u8> {
     if conn.secure_established {
         if let Some(secure) = conn.secure.as_mut() {
-            if let Ok((ciphertext, tag, seq)) = secure.encrypt(plaintext) {
-                let mut pkt = Packet::new(msg_type, Bytes::from(ciphertext), stamp_session);
-                pkt.header.flags |= PacketFlags::ENCRYPTED;
-                pkt.header.length = pkt.payload.len() as u32;
-                pkt.header.sequence = seq;
+            // Build the header first; encrypt fills seq/length/flags and (for v2)
+            // binds the finalized header as AEAD AAD.
+            let mut pkt = Packet::new(msg_type, Bytes::new(), stamp_session);
+            if let Ok((ciphertext, tag)) = secure.encrypt(plaintext, &mut pkt.header) {
+                pkt.payload = Bytes::from(ciphertext);
                 pkt.auth_tag = Some(tag);
                 return pkt.to_bytes().to_vec();
             }
@@ -377,7 +377,8 @@ async fn handle_packet(
                     // (docs/spec/12-authenticated-handshake.md + docs/spec/formal/).
                     match handshake_v2::server_respond(state.identity.keypair(), &epk_c, &KDF_SALT) {
                         Ok(sh) => {
-                            conn.secure = Some(SecureSession::new(Role::Server, sh.keys));
+                            // v2 session: header bound as AEAD AAD.
+                            conn.secure = Some(SecureSession::new_v2(Role::Server, sh.keys));
                             // Remember th to verify the client's encrypted
                             // HandshakeComplete confirmation.
                             conn.pending_v2_th = Some(sh.transcript_hash);

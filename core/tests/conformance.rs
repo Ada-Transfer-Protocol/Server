@@ -2,7 +2,7 @@
 //! reference implementation. The vectors file is the same JSON every SDK's
 //! conformance runner consumes (docs/spec/appendix-test-vectors.md).
 
-use adatp_core::codec::packet::{MessageType, Packet, PacketFlags};
+use adatp_core::codec::packet::{MessageType, Packet};
 use adatp_core::crypto::key_derivation::SessionKeys;
 use adatp_core::session::secure_session::{Role, SecureSession};
 use bytes::Bytes;
@@ -96,13 +96,13 @@ fn encrypted_text_client_to_server() {
     // Client-side encrypt must reproduce the golden ciphertext (seq 1).
     let keys = derive_keys(c);
     let mut client = SecureSession::new(Role::Client, keys);
-    let (ciphertext, tag, seq) = client.encrypt(b"secret message").unwrap();
-    assert_eq!(seq, 1);
+    let mut p = build(MessageType::TextMessage, Vec::new(), c);
+    let (ciphertext, tag) = client.encrypt(b"secret message", &mut p.header).unwrap();
+    assert_eq!(p.header.sequence, 1);
     assert_eq!(hex_encode(&ciphertext), c["expected"]["ciphertext_hex"]);
     assert_eq!(hex_encode(&tag), c["expected"]["auth_tag_hex"]);
 
-    let mut p = build(MessageType::TextMessage, ciphertext, c);
-    p.header.flags |= PacketFlags::ENCRYPTED;
+    p.payload = Bytes::from(ciphertext);
     p.auth_tag = Some(tag);
     assert_eq!(hex_encode(&p.to_bytes()), c["expected"]["frame_hex"].as_str().unwrap());
 
@@ -123,9 +123,11 @@ fn encrypted_gamestate_server_to_client() {
 
     // The vector is server→client at seq 2: burn seq 1 first.
     let mut server = SecureSession::new(Role::Server, derive_keys(c));
-    let _ = server.encrypt(b"x").unwrap(); // seq 1
-    let (ciphertext, tag, seq) = server.encrypt(plaintext).unwrap();
-    assert_eq!(seq, 2);
+    let mut burn = Packet::new(MessageType::TextMessage, Bytes::new(), Uuid::nil());
+    let _ = server.encrypt(b"x", &mut burn.header).unwrap(); // seq 1
+    let mut p = build(MessageType::GameState, Vec::new(), c);
+    let (ciphertext, tag) = server.encrypt(plaintext, &mut p.header).unwrap();
+    assert_eq!(p.header.sequence, 2);
     assert_eq!(hex_encode(&ciphertext), c["expected"]["ciphertext_hex"]);
     assert_eq!(hex_encode(&tag), c["expected"]["auth_tag_hex"]);
 

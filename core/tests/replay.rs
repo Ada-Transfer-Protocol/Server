@@ -6,7 +6,7 @@
 //! — an ordered stream that skips sequence numbers (e.g. a dropped frame) still
 //! advances the monotonic highest-seen window rather than wedging.
 
-use adatp_core::codec::packet::{MessageType, Packet, PacketFlags};
+use adatp_core::codec::packet::{MessageType, Packet};
 use adatp_core::crypto::key_derivation::SessionKeys;
 use adatp_core::crypto::CryptoError;
 use adatp_core::session::secure_session::{Role, SecureSession};
@@ -22,11 +22,9 @@ fn pair() -> (SecureSession, SecureSession) {
 
 /// Encrypt on the client and assemble the wire packet the server will see.
 fn seal(client: &mut SecureSession, msg: &[u8]) -> Packet {
-    let (ciphertext, tag, seq) = client.encrypt(msg).unwrap();
-    let mut p = Packet::new(MessageType::TextMessage, Bytes::from(ciphertext), Uuid::nil());
-    p.header.flags |= PacketFlags::ENCRYPTED;
-    p.header.sequence = seq;
-    p.header.length = p.payload.len() as u32;
+    let mut p = Packet::new(MessageType::TextMessage, Bytes::new(), Uuid::nil());
+    let (ciphertext, tag) = client.encrypt(msg, &mut p.header).unwrap();
+    p.payload = Bytes::from(ciphertext);
     p.auth_tag = Some(tag);
     p
 }
