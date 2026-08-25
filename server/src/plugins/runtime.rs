@@ -98,15 +98,23 @@ impl PluginProcess {
                     }
                 };
                 match msg.get("op").and_then(|o| o.as_str()) {
-                    Some("tool_result") | Some("tool_error") | Some("hook_result") | Some("ready") => {
-                        let id = msg.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
+                    Some("tool_result") | Some("tool_error") | Some("hook_result")
+                    | Some("ready") => {
+                        let id = msg
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         if let Some(tx) = pending_for_reader.lock().await.remove(&id) {
                             let _ = tx.send(msg);
                         }
                     }
                     Some("emit_event") => {
                         if can_emit {
-                            let event = msg.get("event").and_then(|e| e.as_str()).unwrap_or("unnamed");
+                            let event = msg
+                                .get("event")
+                                .and_then(|e| e.as_str())
+                                .unwrap_or("unnamed");
                             let _ = events.send(PluginEvent {
                                 plugin: name_for_reader.clone(),
                                 event: format!("plugin.{name_for_reader}.{event}"),
@@ -118,8 +126,16 @@ impl PluginProcess {
                     }
                     Some("broadcast") => {
                         if can_broadcast {
-                            let room = msg.get("room").and_then(|r| r.as_str()).unwrap_or("global").to_string();
-                            let text = msg.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
+                            let room = msg
+                                .get("room")
+                                .and_then(|r| r.as_str())
+                                .unwrap_or("global")
+                                .to_string();
+                            let text = msg
+                                .get("text")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("")
+                                .to_string();
                             let _ = broadcasts.send((name_for_reader.clone(), room, text)).await;
                         } else {
                             warn!("[plugin:{name_for_reader}] broadcast denied (missing rooms:broadcast permission)");
@@ -140,7 +156,9 @@ impl PluginProcess {
             // stdout closed → process is gone; fail all pending calls.
             let mut p = pending_for_reader.lock().await;
             for (_, tx) in p.drain() {
-                let _ = tx.send(json!({"op":"tool_error","code":"tool_failed","message":"plugin exited"}));
+                let _ = tx.send(
+                    json!({"op":"tool_error","code":"tool_failed","message":"plugin exited"}),
+                );
             }
             let _ = exit_tx.send(());
             info!("[plugin:{name_for_reader}] process ended");

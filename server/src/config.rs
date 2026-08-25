@@ -182,9 +182,7 @@ impl Config {
     /// and no protected prefix admit every room, so nothing breaks unless an
     /// operator opts in via `ROOM_ALLOWLIST` / `ROOM_PROTECTED_PREFIX`.
     pub fn room_join_allowed(&self, room: &str, role: &str) -> Result<(), &'static str> {
-        if !self.room_allowlist.is_empty()
-            && !self.room_allowlist.iter().any(|r| r == room)
-        {
+        if !self.room_allowlist.is_empty() && !self.room_allowlist.iter().any(|r| r == room) {
             return Err("room_not_allowed");
         }
         if let Some(prefix) = self.room_protected_prefix.as_deref() {
@@ -234,7 +232,10 @@ mod tests {
         cfg.room_allowlist = vec!["lobby".into(), "global".into()];
         assert!(cfg.room_join_allowed("lobby", "user").is_ok());
         assert!(cfg.room_join_allowed("global", "user").is_ok());
-        assert_eq!(cfg.room_join_allowed("secret", "user"), Err("room_not_allowed"));
+        assert_eq!(
+            cfg.room_join_allowed("secret", "user"),
+            Err("room_not_allowed")
+        );
     }
 
     #[test]
@@ -243,7 +244,10 @@ mod tests {
         cfg.room_protected_prefix = Some("admin-".into());
         cfg.room_protected_role = "admin".into();
         // Non-admin cannot join a protected room.
-        assert_eq!(cfg.room_join_allowed("admin-ops", "user"), Err("room_forbidden"));
+        assert_eq!(
+            cfg.room_join_allowed("admin-ops", "user"),
+            Err("room_forbidden")
+        );
         // The right role can.
         assert!(cfg.room_join_allowed("admin-ops", "admin").is_ok());
         // Unprotected rooms are unaffected by the prefix rule.
@@ -256,10 +260,16 @@ mod tests {
         cfg.room_allowlist = vec!["admin-ops".into(), "general".into()];
         cfg.room_protected_prefix = Some("admin-".into());
         // In the allowlist but wrong role → still forbidden by the prefix rule.
-        assert_eq!(cfg.room_join_allowed("admin-ops", "user"), Err("room_forbidden"));
+        assert_eq!(
+            cfg.room_join_allowed("admin-ops", "user"),
+            Err("room_forbidden")
+        );
         // In the allowlist and right role → allowed.
         assert!(cfg.room_join_allowed("admin-ops", "admin").is_ok());
         // Not in the allowlist → rejected before the prefix rule is considered.
-        assert_eq!(cfg.room_join_allowed("random", "admin"), Err("room_not_allowed"));
+        assert_eq!(
+            cfg.room_join_allowed("random", "admin"),
+            Err("room_not_allowed")
+        );
     }
 }

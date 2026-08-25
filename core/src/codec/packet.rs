@@ -1,8 +1,8 @@
 use bytes::{Buf, BufMut, Bytes};
 use serde::{Deserialize, Serialize};
 
-use uuid::Uuid;
 use bitflags::bitflags;
+use uuid::Uuid;
 
 pub const MAGIC_NUMBER: u32 = 0x41444154; // "ADAT"
 pub const HEADER_SIZE: usize = 4 + 1 + 2 + 4 + 8 + 2 + 8 + 16; // 45 bytes
@@ -87,45 +87,45 @@ pub enum MessageType {
 impl From<u16> for MessageType {
     fn from(v: u16) -> Self {
         match v {
-             0x0001 => MessageType::HandshakeInit,
-             0x0002 => MessageType::HandshakeResponse,
-             0x0003 => MessageType::HandshakeComplete,
-             0x0010 => MessageType::AuthRequest,
-             0x0011 => MessageType::AuthChallenge,
-             0x0012 => MessageType::AuthResponse,
-             0x0013 => MessageType::AuthSuccess,
-             0x0014 => MessageType::AuthFailure,
+            0x0001 => MessageType::HandshakeInit,
+            0x0002 => MessageType::HandshakeResponse,
+            0x0003 => MessageType::HandshakeComplete,
+            0x0010 => MessageType::AuthRequest,
+            0x0011 => MessageType::AuthChallenge,
+            0x0012 => MessageType::AuthResponse,
+            0x0013 => MessageType::AuthSuccess,
+            0x0014 => MessageType::AuthFailure,
             0x0020 => MessageType::TextMessage,
-             0x0021 => MessageType::TextAck,
-             0x0022 => MessageType::TextRead,
-             0x0030 => MessageType::FileInit,
-             0x0031 => MessageType::FileChunk,
-             0x0032 => MessageType::FileAck,
-             0x0033 => MessageType::FileComplete,
-             0x0034 => MessageType::FileCancel,
-             0x0040 => MessageType::VoiceInit,
-             0x0041 => MessageType::VoiceOffer,
-             0x0042 => MessageType::VoiceAnswer,
-             0x0043 => MessageType::VoiceIce,
-             0x0044 => MessageType::VoiceData,
-             0x0045 => MessageType::VoiceEnd,
-             0x0050 => MessageType::GameState,
-             0x0060 => MessageType::PresenceUpdate,
-             0x0061 => MessageType::TypingIndicator,
-             0x0070 => MessageType::ToolCall,
-             0x0071 => MessageType::ToolResult,
-             0x0072 => MessageType::ToolError,
-             0x0080 => MessageType::Ping,
-             0x0081 => MessageType::Pong,
-             0x0090 => MessageType::VideoInit,
-             0x0091 => MessageType::VideoOffer,
-             0x0092 => MessageType::VideoAnswer,
-             0x0093 => MessageType::VideoData,
-             0x0094 => MessageType::VideoEnd,
-             0x00A0 => MessageType::JoinRoom,
-             0x00A1 => MessageType::RoomJoined,
-             0x00FF => MessageType::Disconnect,
-             _ => MessageType::Unknown,
+            0x0021 => MessageType::TextAck,
+            0x0022 => MessageType::TextRead,
+            0x0030 => MessageType::FileInit,
+            0x0031 => MessageType::FileChunk,
+            0x0032 => MessageType::FileAck,
+            0x0033 => MessageType::FileComplete,
+            0x0034 => MessageType::FileCancel,
+            0x0040 => MessageType::VoiceInit,
+            0x0041 => MessageType::VoiceOffer,
+            0x0042 => MessageType::VoiceAnswer,
+            0x0043 => MessageType::VoiceIce,
+            0x0044 => MessageType::VoiceData,
+            0x0045 => MessageType::VoiceEnd,
+            0x0050 => MessageType::GameState,
+            0x0060 => MessageType::PresenceUpdate,
+            0x0061 => MessageType::TypingIndicator,
+            0x0070 => MessageType::ToolCall,
+            0x0071 => MessageType::ToolResult,
+            0x0072 => MessageType::ToolError,
+            0x0080 => MessageType::Ping,
+            0x0081 => MessageType::Pong,
+            0x0090 => MessageType::VideoInit,
+            0x0091 => MessageType::VideoOffer,
+            0x0092 => MessageType::VideoAnswer,
+            0x0093 => MessageType::VideoData,
+            0x0094 => MessageType::VideoEnd,
+            0x00A0 => MessageType::JoinRoom,
+            0x00A1 => MessageType::RoomJoined,
+            0x00FF => MessageType::Disconnect,
+            _ => MessageType::Unknown,
         }
     }
 }
@@ -203,7 +203,9 @@ impl Packet {
     }
 
     pub fn to_bytes(&self) -> Bytes {
-        let mut buf = Vec::with_capacity(HEADER_SIZE + self.payload.len() + if self.auth_tag.is_some() { 16 } else { 0 });
+        let mut buf = Vec::with_capacity(
+            HEADER_SIZE + self.payload.len() + if self.auth_tag.is_some() { 16 } else { 0 },
+        );
 
         // Write Header (identical bytes are used as the v2 AEAD AAD).
         buf.put_slice(&self.header.header_bytes());
@@ -237,7 +239,7 @@ impl Packet {
         let msg_type_u16 = data.get_u16_le();
         let msg_type = MessageType::from(msg_type_u16);
         let timestamp = data.get_u64_le();
-        
+
         let mut uuid_bytes = [0u8; 16];
         data.copy_to_slice(&mut uuid_bytes);
         let session_id = Uuid::from_bytes(uuid_bytes);
@@ -250,12 +252,12 @@ impl Packet {
         let payload = data.split_to(length as usize);
 
         let auth_tag = if flags.contains(PacketFlags::ENCRYPTED) {
-             if data.len() < 16 {
-                 return Err("Missing auth tag");
-             }
-             let mut tag = [0u8; 16];
-             data.copy_to_slice(&mut tag);
-             Some(tag)
+            if data.len() < 16 {
+                return Err("Missing auth tag");
+            }
+            let mut tag = [0u8; 16];
+            data.copy_to_slice(&mut tag);
+            Some(tag)
         } else {
             None
         };

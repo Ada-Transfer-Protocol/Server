@@ -4,15 +4,15 @@ use serde_json::Value;
 /// Permissions a plugin may request. Everything is default-deny: an
 /// operation is only allowed if its permission is listed in the manifest.
 pub const KNOWN_PERMISSIONS: &[&str] = &[
-    "tools",            // expose callable tools
-    "hooks:auth",       // veto logins
-    "hooks:text",       // observe/veto text messages
-    "hooks:file",       // observe/veto file transfers
-    "hooks:presence",   // observe presence updates
-    "hooks:rooms",      // observe join/leave
-    "hooks:tools",      // observe/veto tool calls (before/after)
-    "emit:events",      // emit custom events (webhook fan-out)
-    "rooms:broadcast",  // send text messages into rooms
+    "tools",           // expose callable tools
+    "hooks:auth",      // veto logins
+    "hooks:text",      // observe/veto text messages
+    "hooks:file",      // observe/veto file transfers
+    "hooks:presence",  // observe presence updates
+    "hooks:rooms",     // observe join/leave
+    "hooks:tools",     // observe/veto tool calls (before/after)
+    "emit:events",     // emit custom events (webhook fan-out)
+    "rooms:broadcast", // send text messages into rooms
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,8 +71,15 @@ fn default_hook_policy() -> String {
 }
 
 const VALID_HOOKS: &[&str] = &[
-    "auth", "text", "file", "presence", "join", "leave",
-    "tool_before", "tool_after", "shutdown",
+    "auth",
+    "text",
+    "file",
+    "presence",
+    "join",
+    "leave",
+    "tool_before",
+    "tool_after",
+    "shutdown",
 ];
 
 /// Hook → permission that must be present to register it.
@@ -92,7 +99,10 @@ impl Manifest {
     pub fn validate(&self) -> Result<(), String> {
         let name_ok = !self.name.is_empty()
             && self.name.len() <= 32
-            && self.name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+            && self
+                .name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
         if !name_ok {
             return Err("name must be 1-32 chars of [a-z0-9_-]".into());
         }
@@ -116,7 +126,10 @@ impl Manifest {
                 return Err("tool names must be 1-64 chars".into());
             }
             if t.name.starts_with("system.") {
-                return Err(format!("tool '{}' uses the reserved 'system.' prefix", t.name));
+                return Err(format!(
+                    "tool '{}' uses the reserved 'system.' prefix",
+                    t.name
+                ));
             }
             if !seen.insert(t.name.clone()) {
                 return Err(format!("duplicate tool '{}'", t.name));
@@ -130,12 +143,19 @@ impl Manifest {
                 return Err(format!("unknown hook '{h}'"));
             }
             if h != "shutdown" && !self.permissions.iter().any(|p| p == hook_permission(h)) {
-                return Err(format!("hook '{h}' requires permission '{}'", hook_permission(h)));
+                return Err(format!(
+                    "hook '{h}' requires permission '{}'",
+                    hook_permission(h)
+                ));
             }
         }
         match self.hook_failure_policy.as_str() {
             "allow" | "deny" => {}
-            other => return Err(format!("hook_failure_policy must be allow|deny, got '{other}'")),
+            other => {
+                return Err(format!(
+                    "hook_failure_policy must be allow|deny, got '{other}'"
+                ))
+            }
         }
         Ok(())
     }

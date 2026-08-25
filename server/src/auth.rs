@@ -131,10 +131,7 @@ impl AuthManager {
     /// Loads (or reloads) the user file. Tries `AUTH_FILE_PATH` first, then
     /// `server/<AUTH_FILE_PATH>` so `cargo run` from the workspace root works.
     fn load_users_blocking(&self) -> Result<usize, String> {
-        let candidates = [
-            self.file_path.clone(),
-            format!("server/{}", self.file_path),
-        ];
+        let candidates = [self.file_path.clone(), format!("server/{}", self.file_path)];
         let content = candidates
             .iter()
             .find_map(|p| std::fs::read_to_string(p).ok())
@@ -162,10 +159,7 @@ impl AuthManager {
         if self.driver != AuthDriver::File {
             return Err("reload only applies to the file driver".into());
         }
-        let candidates = [
-            self.file_path.clone(),
-            format!("server/{}", self.file_path),
-        ];
+        let candidates = [self.file_path.clone(), format!("server/{}", self.file_path)];
         let content = candidates
             .iter()
             .find_map(|p| std::fs::read_to_string(p).ok())

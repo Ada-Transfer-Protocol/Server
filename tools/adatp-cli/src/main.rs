@@ -1,6 +1,6 @@
-use anyhow::{anyhow, Result};
 use adatp_core::codec::packet::{MessageType, Packet};
 use adatp_core::crypto::x25519::{diffie_hellman, KeyPair};
+use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
@@ -39,7 +39,9 @@ async fn main() -> Result<()> {
     println!("Connecting to {url} ...");
     let (ws, _) = tokio::time::timeout(std::time::Duration::from_secs(10), connect_async(&url))
         .await
-        .map_err(|_| anyhow!("Timed out connecting to {url} — is an AdaTP server listening there?"))??;
+        .map_err(|_| {
+            anyhow!("Timed out connecting to {url} — is an AdaTP server listening there?")
+        })??;
     let (mut tx, mut rx) = ws.split();
 
     let session_id = Uuid::new_v4();
@@ -48,16 +50,20 @@ async fn main() -> Result<()> {
     // Times out with a diagnostic instead of hanging forever when the far
     // end is not actually an AdaTP server (e.g. a dev server on the port).
     async fn next_packet(
-        rx: &mut (impl StreamExt<Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
+        rx: &mut (impl StreamExt<
+            Item = std::result::Result<Message, tokio_tungstenite::tungstenite::Error>,
+        > + Unpin),
     ) -> Result<Packet> {
         let deadline = std::time::Duration::from_secs(10);
         loop {
             let msg = tokio::time::timeout(deadline, rx.next())
                 .await
-                .map_err(|_| anyhow!(
-                    "No AdaTP reply within 10s — the endpoint accepted the WebSocket \
+                .map_err(|_| {
+                    anyhow!(
+                        "No AdaTP reply within 10s — the endpoint accepted the WebSocket \
                      but does not speak AdaTP (wrong port or a different server?)"
-                ))?;
+                    )
+                })?;
             match msg {
                 Some(m) => match m? {
                     Message::Binary(data) => {
@@ -81,7 +87,8 @@ async fn main() -> Result<()> {
         Bytes::copy_from_slice(client_keys.public.as_bytes()),
         session_id,
     );
-    tx.send(Message::Binary(init_packet.to_bytes().to_vec())).await?;
+    tx.send(Message::Binary(init_packet.to_bytes().to_vec()))
+        .await?;
     println!("Sent HANDSHAKE_INIT");
 
     // 3. HANDSHAKE_RESPONSE
@@ -106,14 +113,14 @@ async fn main() -> Result<()> {
     );
 
     // 5. HANDSHAKE_COMPLETE
-    let mut complete_packet =
-        Packet::new(MessageType::HandshakeComplete, Bytes::new(), session_id);
+    let mut complete_packet = Packet::new(MessageType::HandshakeComplete, Bytes::new(), session_id);
     let (ciphertext, tag) = secure_session
         .encrypt(b"Verification OK", &mut complete_packet.header)
         .map_err(|e| anyhow!("Encryption error: {:?}", e))?;
     complete_packet.payload = Bytes::from(ciphertext);
     complete_packet.auth_tag = Some(tag);
-    tx.send(Message::Binary(complete_packet.to_bytes().to_vec())).await?;
+    tx.send(Message::Binary(complete_packet.to_bytes().to_vec()))
+        .await?;
     println!("Sent HANDSHAKE_COMPLETE -> Secure session established 🔒");
 
     // 6. Login (optional)
@@ -130,7 +137,8 @@ async fn main() -> Result<()> {
             secure_session.encrypt(&serde_json::to_vec(&login_json)?, &mut login_pkt.header)?;
         login_pkt.payload = Bytes::from(cipher);
         login_pkt.auth_tag = Some(tag);
-        tx.send(Message::Binary(login_pkt.to_bytes().to_vec())).await?;
+        tx.send(Message::Binary(login_pkt.to_bytes().to_vec()))
+            .await?;
 
         let resp = next_packet(&mut rx).await?;
         match resp.header.msg_type {
@@ -150,7 +158,8 @@ async fn main() -> Result<()> {
 
     // 7. Disconnect
     let disconnect = Packet::new(MessageType::Disconnect, Bytes::new(), session_id);
-    tx.send(Message::Binary(disconnect.to_bytes().to_vec())).await?;
+    tx.send(Message::Binary(disconnect.to_bytes().to_vec()))
+        .await?;
     let _ = tx.send(Message::Close(None)).await;
     println!("Disconnected.");
 

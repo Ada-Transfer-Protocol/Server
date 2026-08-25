@@ -1,3 +1,4 @@
+use axum::extract::Request;
 use axum::{
     extract::{ConnectInfo, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode},
@@ -6,7 +7,6 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use axum::extract::Request;
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;

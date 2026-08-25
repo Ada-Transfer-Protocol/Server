@@ -1,6 +1,6 @@
-use ed25519_dalek::{Signer, Verifier, Signature, SigningKey, VerifyingKey};
-use rand::{rngs::OsRng, RngCore};
 use super::CryptoError;
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use rand::{rngs::OsRng, RngCore};
 
 pub struct SigningKeyPair {
     keypair: SigningKey,
@@ -21,7 +21,9 @@ impl SigningKeyPair {
     /// the one clients pin — is derived from it every boot. Contrast with
     /// [`generate`], which is for throwaway/ephemeral identities in tests.
     pub fn from_seed(seed: &[u8; 32]) -> Self {
-        Self { keypair: SigningKey::from_bytes(seed) }
+        Self {
+            keypair: SigningKey::from_bytes(seed),
+        }
     }
 
     /// The 32-byte seed, for persisting a long-term identity. Treat it as
@@ -46,12 +48,14 @@ pub fn verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> Result<(),
 
     let mut pk_bytes = [0u8; 32];
     pk_bytes.copy_from_slice(public_key);
-    
+
     let verifier = VerifyingKey::from_bytes(&pk_bytes).map_err(|_| CryptoError::InvalidKey)?;
-    
+
     let mut sig_bytes = [0u8; 64];
     sig_bytes.copy_from_slice(signature);
     let sig = Signature::from_bytes(&sig_bytes);
 
-    verifier.verify(message, &sig).map_err(|_| CryptoError::SignatureError)
+    verifier
+        .verify(message, &sig)
+        .map_err(|_| CryptoError::SignatureError)
 }

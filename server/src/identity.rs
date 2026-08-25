@@ -30,7 +30,9 @@ impl ServerIdentity {
             if bytes.len() == 32 {
                 let mut seed = [0u8; 32];
                 seed.copy_from_slice(&bytes);
-                return Ok(Self { keypair: SigningKeyPair::from_seed(&seed) });
+                return Ok(Self {
+                    keypair: SigningKeyPair::from_seed(&seed),
+                });
             }
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -66,7 +68,10 @@ impl ServerIdentity {
     /// Lowercase hex of the public key — what an operator copies to a client to
     /// pin, and what is logged at startup.
     pub fn fingerprint(&self) -> String {
-        self.public_key_bytes().iter().map(|b| format!("{b:02x}")).collect()
+        self.public_key_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
     }
 }
 

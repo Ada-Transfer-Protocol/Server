@@ -99,7 +99,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Arc::new(id)
         }
         Err(e) => {
-            eprintln!("FATAL: could not load/create server identity at {}: {e}", cfg.identity_path);
+            eprintln!(
+                "FATAL: could not load/create server identity at {}: {e}",
+                cfg.identity_path
+            );
             std::process::exit(1);
         }
     };
@@ -119,7 +122,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         draining: std::sync::atomic::AtomicBool::new(false),
         conns_in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     });
-    plugins.emit_server_event("server.started", serde_json::json!({ "addr": cfg.bind_addr() }));
+    plugins.emit_server_event(
+        "server.started",
+        serde_json::json!({ "addr": cfg.bind_addr() }),
+    );
 
     let app = api::create_router(state);
     let addr = cfg.bind_addr();
@@ -172,7 +178,10 @@ async fn shutdown_signal(hub: Arc<Hub>, plugins: Arc<PluginManager>) {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
-    info!("Shutdown signal received; closing {} connection(s)...", hub.connection_count());
+    info!(
+        "Shutdown signal received; closing {} connection(s)...",
+        hub.connection_count()
+    );
     plugins.emit_server_event("server.stopping", serde_json::json!({}));
     plugins.shutdown_all().await;
     hub.shutdown_all();

@@ -41,8 +41,14 @@ fn replay_is_rejected_and_fresh_accepted() {
     assert_eq!(server.decrypt(&p2).unwrap(), b"bravo");
 
     // Replaying p1 (older) and p2 (the highest accepted) are both dropped.
-    assert!(matches!(server.decrypt(&p1), Err(CryptoError::ReplayDetected)));
-    assert!(matches!(server.decrypt(&p2), Err(CryptoError::ReplayDetected)));
+    assert!(matches!(
+        server.decrypt(&p1),
+        Err(CryptoError::ReplayDetected)
+    ));
+    assert!(matches!(
+        server.decrypt(&p2),
+        Err(CryptoError::ReplayDetected)
+    ));
 
     // The next fresh sequence still flows.
     assert_eq!(server.decrypt(&p3).unwrap(), b"charlie");
@@ -61,5 +67,8 @@ fn sequence_gap_is_tolerated_then_locks_out_older() {
     assert_eq!(server.decrypt(&p3).unwrap(), b"three");
 
     // The skipped seq 2, arriving late, is now older than the window → dropped.
-    assert!(matches!(server.decrypt(&_p2), Err(CryptoError::ReplayDetected)));
+    assert!(matches!(
+        server.decrypt(&_p2),
+        Err(CryptoError::ReplayDetected)
+    ));
 }

@@ -117,7 +117,11 @@ pub fn server_respond(
     response.extend_from_slice(&spk_s);
     response.extend_from_slice(&sig);
 
-    Ok(ServerHandshake { response, transcript_hash: th, keys })
+    Ok(ServerHandshake {
+        response,
+        transcript_hash: th,
+        keys,
+    })
 }
 
 /// What the client learns after a valid `HandshakeResponse`.
@@ -165,7 +169,10 @@ pub fn client_verify_server_hello(
     let th = transcript_hash(epk_c, &epk_s, &spk_s);
     ed25519::verify(&spk_s, &th, sig)?;
 
-    Ok(ClientVerified { epk_s, transcript_hash: th })
+    Ok(ClientVerified {
+        epk_s,
+        transcript_hash: th,
+    })
 }
 
 /// The plaintext of the client's key-confirmation, `FINISHED_LABEL || th`,
@@ -272,7 +279,10 @@ mod tests {
         assert_eq!(client_keys.server_write_key, sh.keys.server_write_key);
 
         // And the client's Finished confirms under that transcript.
-        assert!(verify_finished(&sh.transcript_hash, &finished_plaintext(&v.transcript_hash)));
+        assert!(verify_finished(
+            &sh.transcript_hash,
+            &finished_plaintext(&v.transcript_hash)
+        ));
     }
 
     #[test]
@@ -301,7 +311,9 @@ mod tests {
 
         let sh = server_respond(&attacker, &epk_c, KDF_SALT).unwrap();
         // The attacker's hello is internally valid...
-        assert!(client_verify_server_hello(&attacker.public_key_bytes(), &epk_c, &sh.response).is_ok());
+        assert!(
+            client_verify_server_hello(&attacker.public_key_bytes(), &epk_c, &sh.response).is_ok()
+        );
         // ...but a client that pinned the REAL server rejects it outright.
         assert!(matches!(
             client_verify_server_hello(&real_pinned, &epk_c, &sh.response),

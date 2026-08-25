@@ -28,7 +28,10 @@ fn case<'a>(v: &'a Value, id: &str) -> &'a Value {
 }
 
 fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
 }
 fn arr32(s: &str) -> [u8; 32] {
     let mut a = [0u8; 32];
@@ -56,7 +59,10 @@ fn transcript_hash_matches_vector() {
     let epk_c = arr32(c["input"]["epk_c_hex"].as_str().unwrap());
     let epk_s = arr32(c["input"]["epk_s_hex"].as_str().unwrap());
     let th = transcript_hash(&epk_c, &epk_s, &id.public_key_bytes());
-    assert_eq!(hexstr(&th), c["expected"]["transcript_hash_hex"].as_str().unwrap());
+    assert_eq!(
+        hexstr(&th),
+        c["expected"]["transcript_hash_hex"].as_str().unwrap()
+    );
 }
 
 #[test]
@@ -69,14 +75,22 @@ fn server_hello_matches_vector_and_verifies() {
     let epk_s = arr32(c["input"]["epk_s_hex"].as_str().unwrap());
 
     let (_th, sig) = sign_transcript(&id, &epk_c, &epk_s);
-    assert_eq!(hexstr(&sig), c["expected"]["signature_hex"].as_str().unwrap(), "signature");
+    assert_eq!(
+        hexstr(&sig),
+        c["expected"]["signature_hex"].as_str().unwrap(),
+        "signature"
+    );
 
     // ServerHello wire = epk_s || spk_s || sig.
     let mut wire = Vec::new();
     wire.extend_from_slice(&epk_s);
     wire.extend_from_slice(&id.public_key_bytes());
     wire.extend_from_slice(&sig);
-    assert_eq!(hexstr(&wire), c["expected"]["server_hello_hex"].as_str().unwrap(), "wire");
+    assert_eq!(
+        hexstr(&wire),
+        c["expected"]["server_hello_hex"].as_str().unwrap(),
+        "wire"
+    );
 
     // A client that pinned this identity accepts it.
     let pinned = id.public_key_bytes();

@@ -1,6 +1,6 @@
+use serde::Serialize;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
-use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 #[allow(dead_code)]
@@ -61,7 +61,7 @@ impl Metrics {
         let uptime = self.start_time.elapsed().as_secs();
         let safe_uptime = if uptime == 0 { 1 } else { uptime };
         let rx = self.total_bytes_rx.load(Ordering::Relaxed);
-        
+
         MetricsSnapshot {
             uptime_seconds: uptime,
             active_connections: self.active_connections.load(Ordering::Relaxed),

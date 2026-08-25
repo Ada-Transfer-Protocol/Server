@@ -1,6 +1,6 @@
-use crate::crypto::{aes_gcm::Cipher, key_derivation::SessionKeys};
 use crate::codec::packet::{Packet, PacketFlags, PacketHeader};
 use crate::crypto::CryptoError;
+use crate::crypto::{aes_gcm::Cipher, key_derivation::SessionKeys};
 
 pub enum Role {
     Client,
@@ -118,8 +118,12 @@ impl SecureSession {
         let aad: &[u8] = if self.bind_aad { &aad_bytes } else { &[] };
 
         let plaintext = match self.role {
-            Role::Client => self.cipher_server.decrypt(&iv, &packet.payload, &tag, aad)?,
-            Role::Server => self.cipher_client.decrypt(&iv, &packet.payload, &tag, aad)?,
+            Role::Client => self
+                .cipher_server
+                .decrypt(&iv, &packet.payload, &tag, aad)?,
+            Role::Server => self
+                .cipher_client
+                .decrypt(&iv, &packet.payload, &tag, aad)?,
         };
 
         // Authenticated successfully — advance the replay window past this seq.
@@ -133,10 +137,10 @@ impl SecureSession {
             Role::Client => self.keys.client_iv_root,
             Role::Server => self.keys.server_iv_root,
         };
-        
+
         let mut iv = root;
         let seq_bytes = sequence.to_le_bytes(); // 8 bytes
-        
+
         // XOR the last 8 bytes of IV (bytes 4..12) with sequence
         // This is a common pattern (e.g. TLS 1.3 uses similar construction)
         for i in 0..8 {
@@ -221,7 +225,10 @@ mod tests {
         tag[0] ^= 0x01;
         forged.auth_tag = Some(tag);
 
-        assert!(server.decrypt(&forged).is_err(), "forged tag must fail to decrypt");
+        assert!(
+            server.decrypt(&forged).is_err(),
+            "forged tag must fail to decrypt"
+        );
         // The genuine seq-1 packet is still accepted afterwards.
         assert_eq!(server.decrypt(&good).unwrap(), b"hello");
     }

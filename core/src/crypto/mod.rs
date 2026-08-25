@@ -1,7 +1,7 @@
-pub mod x25519;
 pub mod aes_gcm;
 pub mod ed25519;
-pub mod key_derivation; // Added
+pub mod key_derivation;
+pub mod x25519; // Added
 
 use thiserror::Error;
 
@@ -9,10 +9,10 @@ use thiserror::Error;
 pub enum CryptoError {
     #[error("Encryption failed")]
     EncryptionError,
-    
+
     #[error("Decryption failed")]
     DecryptionError,
-    
+
     #[error("Invalid key")]
     InvalidKey,
 

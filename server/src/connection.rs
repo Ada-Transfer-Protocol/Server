@@ -49,7 +49,9 @@ pub fn try_acquire(counter: &Arc<AtomicUsize>, max: usize) -> Option<ConnGuard> 
         counter.fetch_sub(1, Ordering::AcqRel);
         return None;
     }
-    Some(ConnGuard { counter: counter.clone() })
+    Some(ConnGuard {
+        counter: counter.clone(),
+    })
 }
 
 /// Per-connection token-bucket limiter for inbound messages (`MSG_RATE_LIMIT`).
@@ -147,7 +149,12 @@ enum Flow {
 
 /// Drive one WebSocket connection. `_conn_guard` holds the connection-cap slot
 /// for the whole lifetime of the connection and releases it on return.
-pub async fn run_ws(socket: WebSocket, state: Arc<AppState>, remote: String, _conn_guard: ConnGuard) {
+pub async fn run_ws(
+    socket: WebSocket,
+    state: Arc<AppState>,
+    remote: String,
+    _conn_guard: ConnGuard,
+) {
     state.metrics.inc_connection();
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (out_tx, mut out_rx) = mpsc::channel::<OutEvent>(OUT_QUEUE_CAPACITY);
@@ -248,9 +255,12 @@ pub async fn run_ws(socket: WebSocket, state: Arc<AppState>, remote: String, _co
         }
     }
     if let Some(user) = conn.authed.as_ref() {
-        state.plugins.emit_server_event("connection.closed", serde_json::json!({
-            "username": user.username, "remote": remote, "reason": close_reason,
-        }));
+        state.plugins.emit_server_event(
+            "connection.closed",
+            serde_json::json!({
+                "username": user.username, "remote": remote, "reason": close_reason,
+            }),
+        );
     }
     let _ = ws_tx.send(Message::Close(None)).await;
     state.metrics.dec_connection();
@@ -258,7 +268,10 @@ pub async fn run_ws(socket: WebSocket, state: Arc<AppState>, remote: String, _co
         "Connection {} closed ({}): user={}",
         remote,
         close_reason,
-        conn.authed.as_ref().map(|u| u.username.as_str()).unwrap_or("-")
+        conn.authed
+            .as_ref()
+            .map(|u| u.username.as_str())
+            .unwrap_or("-")
     );
 }
 
@@ -386,7 +399,8 @@ async fn handle_packet(
                     // a client that pinned spk_S verifies before deriving keys.
                     // This is the ProVerif-verified flow that closes v1's MITM
                     // (docs/spec/12-authenticated-handshake.md + docs/spec/formal/).
-                    match handshake_v2::server_respond(state.identity.keypair(), &epk_c, &KDF_SALT) {
+                    match handshake_v2::server_respond(state.identity.keypair(), &epk_c, &KDF_SALT)
+                    {
                         Ok(sh) => {
                             // v2 session: header bound as AEAD AAD.
                             conn.secure = Some(SecureSession::new_v2(Role::Server, sh.keys));
@@ -419,7 +433,15 @@ async fn handle_packet(
                         Ok(shared) => {
                             let keys = SessionKeys::derive(&shared, &KDF_SALT);
                             conn.secure = Some(SecureSession::new(Role::Server, keys));
-                            if !send_direct(state, conn, ws_tx, MessageType::HandshakeResponse, &server_pub).await {
+                            if !send_direct(
+                                state,
+                                conn,
+                                ws_tx,
+                                MessageType::HandshakeResponse,
+                                &server_pub,
+                            )
+                            .await
+                            {
                                 return Flow::Close("write_error");
                             }
                         }
@@ -471,10 +493,13 @@ async fn handle_packet(
                 Err(_) => {
                     conn.auth_attempts += 1;
                     let _ = send_direct(
-                        state, conn, ws_tx,
+                        state,
+                        conn,
+                        ws_tx,
                         MessageType::AuthFailure,
                         br#"{"error":"malformed_auth_request"}"#,
-                    ).await;
+                    )
+                    .await;
                     return if conn.auth_attempts >= MAX_AUTH_ATTEMPTS {
                         Flow::Close("auth_failed")
                     } else {
@@ -492,15 +517,21 @@ async fn handle_packet(
                         });
                         if !state.plugins.veto_hook("auth", &event).await {
                             conn.auth_attempts += 1;
-                            warn!("Auth vetoed by plugin for {remote} (user '{}')", user.username);
+                            warn!(
+                                "Auth vetoed by plugin for {remote} (user '{}')",
+                                user.username
+                            );
                             state.plugins.emit_server_event("auth.failure", serde_json::json!({
                                 "username": user.username, "remote": remote, "reason": "forbidden",
                             }));
                             let _ = send_direct(
-                                state, conn, ws_tx,
+                                state,
+                                conn,
+                                ws_tx,
                                 MessageType::AuthFailure,
                                 br#"{"error":"forbidden"}"#,
-                            ).await;
+                            )
+                            .await;
                             return if conn.auth_attempts >= MAX_AUTH_ATTEMPTS {
                                 Flow::Close("auth_failed")
                             } else {
@@ -528,11 +559,25 @@ async fn handle_packet(
                         conn.hub_id = Some(id);
                     }
                     conn.authed = Some(user.clone());
-                    info!("Auth success for {remote}: {} (role {})", user.username, user.role);
-                    state.plugins.emit_server_event("auth.success", serde_json::json!({
-                        "username": user.username, "role": user.role, "remote": remote,
-                    }));
-                    if !send_direct(state, conn, ws_tx, MessageType::AuthSuccess, ok_payload.as_bytes()).await {
+                    info!(
+                        "Auth success for {remote}: {} (role {})",
+                        user.username, user.role
+                    );
+                    state.plugins.emit_server_event(
+                        "auth.success",
+                        serde_json::json!({
+                            "username": user.username, "role": user.role, "remote": remote,
+                        }),
+                    );
+                    if !send_direct(
+                        state,
+                        conn,
+                        ws_tx,
+                        MessageType::AuthSuccess,
+                        ok_payload.as_bytes(),
+                    )
+                    .await
+                    {
                         return Flow::Close("write_error");
                     }
                     Flow::Continue
@@ -544,10 +589,13 @@ async fn handle_packet(
                         "username": body.username, "remote": remote, "reason": "invalid_credentials",
                     }));
                     let _ = send_direct(
-                        state, conn, ws_tx,
+                        state,
+                        conn,
+                        ws_tx,
                         MessageType::AuthFailure,
                         br#"{"error":"invalid_credentials"}"#,
-                    ).await;
+                    )
+                    .await;
                     if conn.auth_attempts >= MAX_AUTH_ATTEMPTS {
                         Flow::Close("auth_failed")
                     } else {
@@ -557,10 +605,13 @@ async fn handle_packet(
                 Err(AuthError::Unavailable(e)) => {
                     warn!("Auth backend unavailable: {e}");
                     let _ = send_direct(
-                        state, conn, ws_tx,
+                        state,
+                        conn,
+                        ws_tx,
                         MessageType::AuthFailure,
                         br#"{"error":"auth_unavailable"}"#,
-                    ).await;
+                    )
+                    .await;
                     // Fail closed: never admit clients while the backend is down.
                     Flow::Close("auth_unavailable")
                 }
@@ -589,10 +640,13 @@ async fn handle_packet(
                 Ok(r) if valid_room_name(r) => r.to_string(),
                 _ => {
                     let _ = send_direct(
-                        state, conn, ws_tx,
+                        state,
+                        conn,
+                        ws_tx,
                         MessageType::AuthFailure,
                         br#"{"error":"invalid_room_name"}"#,
-                    ).await;
+                    )
+                    .await;
                     return Flow::Continue;
                 }
             };
@@ -604,17 +658,29 @@ async fn handle_packet(
             //
             // (a) Built-in config policy: optional allowlist and a
             //     protected-prefix role requirement (see Config::room_join_allowed).
-            let role = conn.authed.as_ref().map(|u| u.role.clone()).unwrap_or_default();
+            let role = conn
+                .authed
+                .as_ref()
+                .map(|u| u.role.clone())
+                .unwrap_or_default();
             if let Err(reason) = state.cfg.room_join_allowed(&room, &role) {
                 warn!(
                     "Room join denied by policy: user '{}' → '{}' ({reason})",
-                    conn.authed.as_ref().unwrap().username, room
+                    conn.authed.as_ref().unwrap().username,
+                    room
                 );
                 state.plugins.emit_server_event("room.denied", serde_json::json!({
                     "room": room, "username": conn.authed.as_ref().unwrap().username, "reason": reason,
                 }));
                 let body = format!(r#"{{"error":"{reason}"}}"#);
-                let _ = send_direct(state, conn, ws_tx, MessageType::AuthFailure, body.as_bytes()).await;
+                let _ = send_direct(
+                    state,
+                    conn,
+                    ws_tx,
+                    MessageType::AuthFailure,
+                    body.as_bytes(),
+                )
+                .await;
                 return Flow::Continue;
             }
 
@@ -629,16 +695,20 @@ async fn handle_packet(
                 if !state.plugins.veto_hook("join", &event).await {
                     warn!(
                         "Room join vetoed by plugin: user '{}' → '{}'",
-                        conn.authed.as_ref().unwrap().username, room
+                        conn.authed.as_ref().unwrap().username,
+                        room
                     );
                     state.plugins.emit_server_event("room.denied", serde_json::json!({
                         "room": room, "username": conn.authed.as_ref().unwrap().username, "reason": "forbidden",
                     }));
                     let _ = send_direct(
-                        state, conn, ws_tx,
+                        state,
+                        conn,
+                        ws_tx,
                         MessageType::AuthFailure,
                         br#"{"error":"forbidden"}"#,
-                    ).await;
+                    )
+                    .await;
                     return Flow::Continue;
                 }
             }
@@ -667,12 +737,20 @@ async fn handle_packet(
                     );
                 }
                 conn.room = room.clone();
-                info!("{} joined room '{}'", conn.authed.as_ref().unwrap().username, room);
-                state.plugins.emit_server_event("room.joined", serde_json::json!({
-                    "room": room,
-                    "username": conn.authed.as_ref().unwrap().username,
-                }));
-                if !send_direct(state, conn, ws_tx, MessageType::RoomJoined, room.as_bytes()).await {
+                info!(
+                    "{} joined room '{}'",
+                    conn.authed.as_ref().unwrap().username,
+                    room
+                );
+                state.plugins.emit_server_event(
+                    "room.joined",
+                    serde_json::json!({
+                        "room": room,
+                        "username": conn.authed.as_ref().unwrap().username,
+                    }),
+                );
+                if !send_direct(state, conn, ws_tx, MessageType::RoomJoined, room.as_bytes()).await
+                {
                     return Flow::Close("write_error");
                 }
             }
@@ -708,7 +786,15 @@ async fn handle_packet(
                 if plaintext.starts_with(b"TOOL:") {
                     let (_, reply_json) = execute_tool_call(state, conn, &plaintext[5..]).await;
                     let reply = format!("TOOLRESULT:{reply_json}");
-                    if !send_direct(state, conn, ws_tx, MessageType::TextMessage, reply.as_bytes()).await {
+                    if !send_direct(
+                        state,
+                        conn,
+                        ws_tx,
+                        MessageType::TextMessage,
+                        reply.as_bytes(),
+                    )
+                    .await
+                    {
                         return Flow::Close("write_error");
                     }
                     return Flow::Continue;
@@ -740,9 +826,12 @@ async fn handle_packet(
             }
 
             if t == MessageType::FileComplete {
-                state.plugins.emit_server_event("file.completed", serde_json::json!({
-                    "room": conn.room, "sender": sender_ctx(conn),
-                }));
+                state.plugins.emit_server_event(
+                    "file.completed",
+                    serde_json::json!({
+                        "room": conn.room, "sender": sender_ctx(conn),
+                    }),
+                );
             }
             if t == MessageType::PresenceUpdate && state.plugins.has_hook("presence") {
                 let event = serde_json::json!({
@@ -816,7 +905,11 @@ async fn execute_tool_call(
         room: conn.room.clone(),
     };
 
-    let args = if call.args.is_null() { serde_json::json!({}) } else { call.args };
+    let args = if call.args.is_null() {
+        serde_json::json!({})
+    } else {
+        call.args
+    };
     match state.plugins.call_tool(&caller, &call.tool, args).await {
         Ok(result) => {
             let reply = serde_json::json!({
@@ -880,10 +973,13 @@ async fn unauthorized(
 ) -> Flow {
     conn.preauth_violations += 1;
     let _ = send_direct(
-        state, conn, ws_tx,
+        state,
+        conn,
+        ws_tx,
         MessageType::AuthFailure,
         br#"{"error":"not_authenticated"}"#,
-    ).await;
+    )
+    .await;
     if conn.preauth_violations >= MAX_PREAUTH_VIOLATIONS {
         Flow::Close("preauth_flood")
     } else {
@@ -901,12 +997,18 @@ mod tests {
         let t0 = Instant::now();
         // A burst up to capacity is allowed at a single instant.
         for i in 0..5 {
-            assert!(rl.allow(t0), "message {i} within the burst budget should pass");
+            assert!(
+                rl.allow(t0),
+                "message {i} within the burst budget should pass"
+            );
         }
         // One more at the same instant is over the limit.
         assert!(!rl.allow(t0), "burst + 1 must be rejected");
         // After a full second, tokens refill and traffic flows again.
-        assert!(rl.allow(t0 + Duration::from_secs(1)), "a token must be available after 1s");
+        assert!(
+            rl.allow(t0 + Duration::from_secs(1)),
+            "a token must be available after 1s"
+        );
     }
 
     #[test]
@@ -924,12 +1026,22 @@ mod tests {
         let g1 = try_acquire(&counter, 2).expect("slot 1");
         let _g2 = try_acquire(&counter, 2).expect("slot 2");
         // At the cap, further acquisitions are rejected and reserve nothing.
-        assert!(try_acquire(&counter, 2).is_none(), "over the cap must be rejected");
-        assert_eq!(counter.load(Ordering::Acquire), 2, "a rejected acquire leaks no slot");
+        assert!(
+            try_acquire(&counter, 2).is_none(),
+            "over the cap must be rejected"
+        );
+        assert_eq!(
+            counter.load(Ordering::Acquire),
+            2,
+            "a rejected acquire leaks no slot"
+        );
         // Releasing a slot frees capacity again.
         drop(g1);
         assert_eq!(counter.load(Ordering::Acquire), 1);
-        assert!(try_acquire(&counter, 2).is_some(), "a freed slot can be reused");
+        assert!(
+            try_acquire(&counter, 2).is_some(),
+            "a freed slot can be reused"
+        );
     }
 
     #[test]
@@ -948,7 +1060,10 @@ mod tests {
     #[test]
     fn plaintext_rejected_only_after_session_established() {
         // No session yet: a plaintext AuthRequest is the normal pre-handshake flow.
-        assert!(!plaintext_downgrade_rejected(false, MessageType::AuthRequest));
+        assert!(!plaintext_downgrade_rejected(
+            false,
+            MessageType::AuthRequest
+        ));
         // Session exists: plaintext for sensitive types is a downgrade → rejected.
         assert!(plaintext_downgrade_rejected(true, MessageType::AuthRequest));
         assert!(plaintext_downgrade_rejected(true, MessageType::TextMessage));
