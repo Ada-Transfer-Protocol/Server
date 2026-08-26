@@ -210,11 +210,22 @@ Reverb parity, cluster scale). Kept honest: shipped vs planned, separated.
   the *other* members of a private/presence room, never the sender, never
   persisted; dropped on public rooms and for non-`client-*` names
   (`MessageType::ClientEvent`). Verified e2e (delivery, no self-echo, public drop).
+- **Connection-state recovery** — each room keeps a capped replay log of
+  `TextMessage`s with per-node offsets; a dropped session's cursor is remembered
+  (`RECOVERY_TTL_MS`) so a client reconnecting with the same session id +
+  `joinRoom({recover:true})` is replayed exactly what it missed. Server-tracked
+  (the header sequence is the AEAD nonce), node-local, best-effort — the honest
+  wording is "message recovery on reconnect", not "seamless failover". Verified e2e.
+- **Reliable-delivery ack** — a `TextMessage` sent with the `RELIABLE` flag
+  (`sendTextMessageWithAck`) is answered with a `TextAck` carrying the fan-out
+  count, correlated by sequence, with a configurable client timeout. Opt-in;
+  plain sends stay fire-and-forget. Verified e2e.
 
 **Planned (named, not built):**
 - **Cross-node presence** — the roster is currently per-node; making
   `member_added`/`removed` and the `here` roster span the fleet needs the
-  backplane to carry presence deltas + a shared roster store.
+  backplane to carry presence deltas + a shared roster store. The same node-local
+  limit applies to reconnect recovery (the replay log lives on one node).
 - **`adatp-laravel`** broadcast driver + device-fleet client; **`adatp-echo`**
   Laravel Echo connector + a parity suite against Reverb.
 - **Cloud**: per-project auth "middleware" config pushed to nodes; admin
@@ -222,15 +233,15 @@ Reverb parity, cluster scale). Kept honest: shipped vs planned, separated.
   (`[prefix]-customer-node` / `-official`), automatic domain + SSL, and an
   "AdaTP is actually installed" check before wiring a node.
 - **Backplane adapters** beyond Redis (NATS / others) selectable per deployment.
-- **Connection-state recovery** — Redis-Streams offsets + `JoinRoom since_offset`
-  so a reconnecting client replays what it missed (the honest wording is
-  "message recovery on reconnect", not "seamless failover").
-- **Callback ack + timeout** (configurable) and an **HTTP long-polling fallback**
-  when WebSocket is unavailable.
+- **HTTP long-polling fallback** when WebSocket is unavailable. Note the design
+  tension to resolve first: the hop-by-hop X25519/AES session is bound to the WS
+  connection, so a stateless poll transport needs its own auth+confidentiality
+  story (TLS-only, or a poll-session handshake) rather than reusing the frame crypto.
 
-The single-node channel semantics (auth, presence, client events) now match
-Reverb; a migration guide must still say plainly where AdaTP is behind —
-**cross-node presence**, **mature reconnect/state-recovery**, and the
+The single-node channel semantics (auth, presence, client events, reconnect
+recovery, delivery acks) now match Reverb; a migration guide must still say
+plainly where AdaTP is behind — **cross-node** presence and recovery (both
+node-local today), the **HTTP long-polling fallback**, and the
 **`adatp-laravel`/`adatp-echo`** packages themselves — hiding that is the kind
 of claim this document exists to forbid.
 
