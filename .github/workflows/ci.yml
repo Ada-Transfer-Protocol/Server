@@ -5,8 +5,22 @@ on:
     branches: [main, "release/**"]
   pull_request:
 
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # Build + test on the vendored crates, fully offline — the same posture the
+  # release Dockerfile uses (`cargo build --release --offline`). Runs the
+  # conformance golden vectors (core/tests/conformance.rs).
+  # ---------------------------------------------------------------------------
   build-and-test:
+    name: build & test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -14,16 +28,83 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
+
+      # The server crate pulls reqwest (native-tls) -> OpenSSL on Linux.
       - name: Install OpenSSL headers (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build (vendored, offline)
-        run: cargo build --workspace --offline --release
-      - name: Unit + conformance tests (golden vectors)
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-target-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-target-
+
+      - name: Build (workspace, vendored, offline)
+        run: cargo build --workspace --offline
+
+      - name: Unit + conformance tests (golden vectors, offline)
         run: cargo test --workspace --offline
-      - name: Upload server binary
+
+  # ---------------------------------------------------------------------------
+  # Formatting + lints. Offline against the vendored crates.
+  # ---------------------------------------------------------------------------
+  lint:
+    name: fmt & clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install OpenSSL headers
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --offline
+
+  # ---------------------------------------------------------------------------
+  # Fuzz smoke — best-effort. cargo-fuzz is nightly-only and libfuzzer-sys is
+  # NOT vendored, so this job needs network access and a nightly toolchain; it
+  # is intentionally non-blocking (continue-on-error). See fuzz/README.md.
+  # A quick 30 s run over the frame parser catches regressions that panic on
+  # the very first inputs; deeper campaigns run out of band.
+  # ---------------------------------------------------------------------------
+  fuzz-smoke:
+    name: fuzz smoke (best-effort)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Enable live registry for fuzz deps
+        # libfuzzer-sys is intentionally NOT vendored. Cargo discovers config
+        # from the CWD upward, so move the root offline/vendored config aside
+        # for this ephemeral runner; cargo then fetches the fuzzer's deps from
+        # the live registry. (fuzz/.cargo/config.toml documents the same
+        # override for local runs invoked from the fuzz directory.)
+        run: mv .cargo/config.toml .cargo/config.toml.disabled
+        # Force the gnu target: cargo-fuzz's default here resolves to
+        # x86_64-unknown-linux-musl (static libc), and AddressSanitizer is
+        # incompatible with a statically linked libc. gnu (dynamic libc) is the
+        # standard sanitizer-compatible target; the command line overrides any
+        # inherited default.
+      - name: Run frame_parser (30s)
+        run: cargo +nightly fuzz run frame_parser --target x86_64-unknown-linux-gnu -- -max_total_time=30
+      - name: Run frame_roundtrip (30s)
+        run: cargo +nightly fuzz run frame_roundtrip --target x86_64-unknown-linux-gnu -- -max_total_time=30
+      - name: Upload crash artifacts
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: adatp-server-${{ matrix.os }}
-          path: target/release/adatp-server
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

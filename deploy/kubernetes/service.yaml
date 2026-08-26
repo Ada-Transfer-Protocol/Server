@@ -1,0 +1,22 @@
+# ClusterIP Service fronting the AdaTP server.
+#
+# This exposes plain HTTP/WebSocket on port 3000 inside the cluster only.
+# TLS terminates OUTSIDE this Service (Ingress / gateway / mesh) — see the TLS
+# NOTE in deployment.yaml. Point your Ingress backend at this Service and
+# ensure it permits WebSocket upgrades.
+apiVersion: v1
+kind: Service
+metadata:
+  name: adatp-server
+  labels:
+    app.kubernetes.io/name: adatp-server
+    app.kubernetes.io/component: server
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: adatp-server
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP

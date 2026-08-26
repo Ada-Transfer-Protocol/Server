@@ -1,5 +1,11 @@
 # Production Architecture
 
+One **single-node**, in-memory process. Rooms, connections and presence live
+only in RAM and are lost on restart; only API keys and webhook endpoints
+persist (SQLite). The `wss://` edge in the diagram below is **required, not
+decorative** — the origin has no TLS and its handshake is unauthenticated
+([`../SECURITY_MODEL.md`](../SECURITY_MODEL.md)).
+
 ## Topology
 
 One AdaTP process, one port. TLS terminates at the edge; the origin speaks

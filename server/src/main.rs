@@ -8,14 +8,18 @@ use log::info;
 mod admin;
 mod api;
 mod auth;
+mod backplane;
+mod channel_auth;
 mod config;
 mod connection;
 mod db;
 mod hub;
+mod identity;
 mod load;
 mod logging;
 mod metrics;
 mod plugins;
+mod publish;
 mod silo;
 mod webhooks;
 
@@ -60,7 +64,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let cfg = Arc::new(Config::load());
     let metrics = Arc::new(Metrics::new());
     let hub = Arc::new(Hub::new());
-    let auth = AuthManager::new(&cfg);
+    // Fail-closed: the file driver refuses to start without a valid user file
+    // (see auth::AuthManager::new). Report clearly and exit non-zero.
+    let auth = match AuthManager::new(&cfg) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("FATAL: {e}");
+            std::process::exit(1);
+        }
+    };
 
     // Ensure the SQLite file exists for sqlite: URLs before connecting.
     if let Some(path) = cfg.database_url.strip_prefix("sqlite:") {
@@ -78,6 +90,49 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let load = load::LoadTracker::start(metrics.clone(), hub.clone());
     let admin_token = admin::resolve_admin_token();
 
+    // Long-term identity for the v2 authenticated handshake (generated on first
+    // boot). Loaded even on v1-only deployments, where it is simply unused.
+    let identity = match identity::ServerIdentity::load_or_create(&cfg.identity_path) {
+        Ok(id) => {
+            info!(
+                "server identity (Ed25519, for v2 handshake pinning): {} [{}]",
+                id.fingerprint(),
+                cfg.identity_path
+            );
+            Arc::new(id)
+        }
+        Err(e) => {
+            eprintln!(
+                "FATAL: could not load/create server identity at {}: {e}",
+                cfg.identity_path
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // Optional multi-node routing backplane (Redis pub/sub). When configured, a
+    // room broadcast fans out to every node on the same Redis, so rooms span the
+    // fleet. Unset = single-node (in-process routing only). Fail-closed: if the
+    // operator asked for a backplane and it can't connect, refuse to start.
+    let backplane = if let Some(url) = &cfg.backplane_url {
+        match backplane::Backplane::start(url, hub.clone()).await {
+            Ok(bp) => {
+                info!(
+                    "multi-node backplane active via {} (node {})",
+                    url,
+                    bp.node_id()
+                );
+                Some(bp)
+            }
+            Err(e) => {
+                eprintln!("FATAL: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
     let state = Arc::new(AppState {
         metrics,
         db,
@@ -87,11 +142,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         plugins: plugins.clone(),
         webhooks,
         load,
+        identity,
+        backplane,
         logs,
         admin_token,
         draining: std::sync::atomic::AtomicBool::new(false),
+        conns_in_flight: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     });
-    plugins.emit_server_event("server.started", serde_json::json!({ "addr": cfg.bind_addr() }));
+    plugins.emit_server_event(
+        "server.started",
+        serde_json::json!({ "addr": cfg.bind_addr() }),
+    );
 
     let app = api::create_router(state);
     let addr = cfg.bind_addr();
@@ -144,7 +205,10 @@ async fn shutdown_signal(hub: Arc<Hub>, plugins: Arc<PluginManager>) {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
-    info!("Shutdown signal received; closing {} connection(s)...", hub.connection_count());
+    info!(
+        "Shutdown signal received; closing {} connection(s)...",
+        hub.connection_count()
+    );
     plugins.emit_server_event("server.stopping", serde_json::json!({}));
     plugins.shutdown_all().await;
     hub.shutdown_all();

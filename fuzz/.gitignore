@@ -1,0 +1,6 @@
+# cargo-fuzz build output and crash artifacts. The seed corpus under
+# corpus/<target>/ is intentionally tracked (see README.md).
+/target
+/artifacts
+/coverage
+Cargo.lock

@@ -1,5 +1,12 @@
 # Sizing & Capacity
 
+> **Every number on this page is guidance/estimate, not a benchmarked SLA.**
+> The figures come from a developer laptop on a **debug** build and are meant
+> to teach the *cost model*, not to promise throughput. For real numbers,
+> reproduce on your own hardware with the harness below, and see the
+> separately-maintained results in [`benchmarks.md`](./benchmarks.md). AdaTP is
+> **single-node** — capacity is per-node ([ha.md](./ha.md)).
+
 There is no magic connection number. AdaTP's cost is dominated by **fan-out**,
 not connection count — size from your traffic shape, then verify with the
 bundled load tester.

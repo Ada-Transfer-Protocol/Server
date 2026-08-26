@@ -1,12 +1,12 @@
+use axum::extract::Request;
 use axum::{
     extract::{ConnectInfo, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
-use axum::extract::Request;
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -31,11 +31,21 @@ pub struct AppState {
     pub plugins: Arc<PluginManager>,
     pub webhooks: Arc<WebhookManager>,
     pub load: Arc<LoadTracker>,
+    /// Long-term Ed25519 identity for the v2 authenticated handshake; its
+    /// public key is what clients pin. Present but unused on v1-only traffic.
+    pub identity: Arc<crate::identity::ServerIdentity>,
+    /// The multi-node routing backplane, when `ADATP_BACKPLANE_URL` is set.
+    /// `None` on a single-node deployment. Exposed via `/status` so the control
+    /// plane (and operators) can see whether a node is on a backplane.
+    pub backplane: Option<Arc<crate::backplane::Backplane>>,
     pub logs: &'static BufLogger,
     pub admin_token: String,
     /// When true, /readyz reports 503 and new WebSocket connections are
     /// rejected (load-balancer drain).
     pub draining: std::sync::atomic::AtomicBool,
+    /// Live count of in-flight WebSocket connections, used to enforce the
+    /// `MAX_CONNECTIONS` cap. Reserved at upgrade, released on close.
+    pub conns_in_flight: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 async fn api_key_middleware(
@@ -68,6 +78,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/ws", get(ws_handler))
         .route("/healthz", get(healthz_handler))
         .route("/readyz", get(readyz_handler))
+        // App-server publish (HMAC-signed; its own auth, not the admin/api-key
+        // layer). Disabled unless ADATP_PUBLISH_SECRET is set.
+        .route("/publish", post(crate::publish::publish_handler))
         .nest("/api", api_routes)
         .nest("/admin/v1", crate::admin::admin_router(state.clone()))
         .nest("/silo", crate::silo::silo_router())
@@ -106,12 +119,24 @@ async fn readyz_handler(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
+fn backplane_status(state: &AppState) -> serde_json::Value {
+    match &state.backplane {
+        Some(bp) => json!({
+            "enabled": true,
+            "node_id": bp.node_id().to_string(),
+            "redis": bp.addr(),
+        }),
+        None => json!({ "enabled": false }),
+    }
+}
+
 async fn status_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(json!({
         "status": "ok",
         "service": "adatp-server",
         "auth_driver": state.auth.driver_name(),
         "connections": state.hub.connection_count(),
+        "backplane": backplane_status(&state),
     }))
 }
 
@@ -129,6 +154,7 @@ async fn metrics_handler(State(state): State<Arc<AppState>>) -> Json<serde_json:
             .hub
             .dropped_msgs
             .load(std::sync::atomic::Ordering::Relaxed),
+        "backplane": backplane_status(&state),
     }))
 }
 
@@ -140,9 +166,16 @@ async fn ws_handler(
     if state.draining.load(std::sync::atomic::Ordering::Relaxed) {
         return (StatusCode::SERVICE_UNAVAILABLE, "draining").into_response();
     }
+    // Connection cap (Finding 3): reserve a slot or reject the new socket.
+    let guard = match connection::try_acquire(&state.conns_in_flight, state.cfg.max_connections) {
+        Some(g) => g,
+        None => {
+            return (StatusCode::SERVICE_UNAVAILABLE, "max connections reached").into_response()
+        }
+    };
     let max = state.cfg.max_frame_bytes + 4096;
     ws.max_message_size(max)
         .max_frame_size(max)
-        .on_upgrade(move |socket| connection::run_ws(socket, state, addr.to_string()))
+        .on_upgrade(move |socket| connection::run_ws(socket, state, addr.to_string(), guard))
         .into_response()
 }

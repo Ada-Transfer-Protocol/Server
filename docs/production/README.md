@@ -7,6 +7,37 @@ connections live in memory; only API keys and webhook endpoints persist (SQLite)
 Plan capacity, HA and backups with that model in mind — the pages below never
 promise clustering or message persistence, because v1 does not have them.
 
+The security model that governs every page here is
+[`../SECURITY_MODEL.md`](../SECURITY_MODEL.md) — in short: **run behind TLS**,
+because AdaTP's own crypto is hop-by-hop (not E2E) and its handshake is not yet
+authenticated.
+
+## Production readiness at a glance
+
+What is actually **Shipped** in the server, what **you must provide** as the
+operator, and what is **Roadmap** (does not exist in v1 — do not design around
+it). Details are on each linked page; the roadmap column tracks
+[`../../ROADMAP.md`](../../ROADMAP.md).
+
+| Topic | Status | The honest one-liner |
+| :-- | :-- | :-- |
+| **TLS / edge** | Operator-provides · native listener is Roadmap | The server speaks plain `ws://`; you terminate `wss://` at a proxy. **Mandatory.** ([tls-cloudflare.md](./tls-cloudflare.md)) |
+| **Authentication** | **Shipped** (`file`/`api`/`none`, fail-closed) · IdP Operator-provides | Real per-connection verification; use `api` against your identity system. ([auth-providers.md](./auth-providers.md)) |
+| **Security hardening** | **Shipped** controls · deployment Operator-provides | Room isolation, attempt caps, constant-time token checks; you own network + secrets. ([security-hardening.md](./security-hardening.md)) |
+| **Webhooks** | **Shipped** | HMAC-SHA256 signing, SSRF guard (v4+v6), retries, circuit breaker, audit log. ([webhooks-ops.md](./webhooks-ops.md)) |
+| **Plugins** | **Shipped** | Process isolation, default-deny manifests, timeouts, rate limits. ([plugins-ops.md](./plugins-ops.md)) |
+| **Silo operator panel** | **Shipped** | Embedded SCADA-style UI at `/silo`. ([silo-panel-ops.md](./silo-panel-ops.md)) |
+| **Observability** | **Shipped** (metrics, logs, load series) · scrape/alert backend Operator-provides | Endpoints and an SSE log stream exist; wiring to your stack is yours. ([observability.md](./observability.md)) |
+| **Sizing** | **Shipped** harness · figures are **guidance, not SLAs** | Cost is fan-out, not connection count; verify on your hardware. ([sizing.md](./sizing.md)) |
+| **Performance tuning** | **Shipped** (a short, real knob list) | Biggest levers are build type, room shape, OS limits — not envs. ([performance-tuning.md](./performance-tuning.md)) |
+| **Incident runbook** | **Shipped** (commands map to real endpoints) | Drain, kick, restart, fail-closed rehearsal. ([incident-runbook.md](./incident-runbook.md)) |
+| **Backup / restore** | **Shipped** (SQLite is a file) · schedule/offsite Operator-provides | Only API keys + webhook config persist; messages never do. ([backup.md](./backup.md)) |
+| **Upgrade / rollback** | **Shipped** (drain-based) · artifact mgmt Operator-provides | Every upgrade is a restart; drain turns it into an announced blip. ([upgrade-rollback.md](./upgrade-rollback.md)) |
+| **Kubernetes** | **Shipped** single-replica starter · autoscaling Operator-provides | One replica per instance — there is nothing to cluster in v1. ([install-kubernetes.md](./install-kubernetes.md)) |
+| **High availability** | Fast *recovery* Operator-builds · zero-downtime *failover* is **Roadmap** | Supervised restart + active/passive; no shared state between nodes. ([ha.md](./ha.md)) |
+| **Clustering / multi-node rooms** | **Roadmap** (state backplane) | Two servers are two separate worlds today. ([ha.md](./ha.md)) |
+| **Message persistence / replay** | **Roadmap** | Delivery is at-most-once, by design in v1. ([../architecture/reliability.md](../architecture/reliability.md)) |
+
 ## Recommended reading order
 
 ### 1. Install

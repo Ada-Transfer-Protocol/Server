@@ -24,6 +24,7 @@ the index. Requirements language follows RFC 2119
 | 09 | [Extensions](spec/09-extensions.md) | Normative v1.0 |
 | 10 | [Versioning](spec/10-versioning.md) | Normative v1.0 |
 | 11 | [Conformance](spec/11-conformance.md) | Normative v1.0 |
+| 12 | [Authenticated Handshake](spec/12-authenticated-handshake.md) | **Proposed v2** — design + [formal model](spec/formal/); not yet implemented |
 | A | [Appendix: Error Codes](spec/appendix-error-codes.md) | Normative v1.0 |
 | B | [Appendix: Test Vectors](spec/appendix-test-vectors.md) | Normative v1.0 (source of truth: [`tests/conformance/vectors/adatp-v1-vectors.json`](../tests/conformance/vectors/adatp-v1-vectors.json)) |
 

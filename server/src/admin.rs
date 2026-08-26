@@ -38,7 +38,10 @@ pub fn admin_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/drain", post(drain))
         .route("/webhooks", get(webhooks_list).post(webhooks_create))
         .route("/webhooks/audit", get(webhooks_audit))
-        .route("/webhooks/:id", axum::routing::patch(webhooks_patch).delete(webhooks_delete))
+        .route(
+            "/webhooks/:id",
+            axum::routing::patch(webhooks_patch).delete(webhooks_delete),
+        )
         .route("/webhooks/:id/test", post(webhooks_test))
         .route("/plugins", get(plugins_list))
         .route("/plugins/:name/enable", post(plugin_enable))
@@ -147,15 +150,16 @@ async fn connections(State(state): State<Arc<AppState>>) -> Json<serde_json::Val
     Json(json!({ "connections": state.hub.list_connections() }))
 }
 
-async fn kick_connection(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<u64>,
-) -> Response {
+async fn kick_connection(State(state): State<Arc<AppState>>, Path(id): Path<u64>) -> Response {
     if state.hub.kick(id) {
         info!("Admin kicked connection {id}");
         Json(json!({ "ok": true })).into_response()
     } else {
-        (StatusCode::NOT_FOUND, Json(json!({ "error": "unknown_connection" }))).into_response()
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "unknown_connection" })),
+        )
+            .into_response()
     }
 }
 
@@ -273,10 +277,17 @@ async fn webhooks_create(
     Json(body): Json<WebhookCreateBody>,
 ) -> Response {
     if let Err(e) = state.webhooks.validate_url(&body.url).await {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "invalid_url", "detail": e })))
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid_url", "detail": e })),
+        )
             .into_response();
     }
-    let events = if body.events.is_empty() { vec!["*".to_string()] } else { body.events };
+    let events = if body.events.is_empty() {
+        vec!["*".to_string()]
+    } else {
+        body.events
+    };
     let secret = body
         .secret
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
@@ -315,7 +326,11 @@ async fn webhooks_patch(
             state.webhooks.refresh().await;
             Json(json!({ "ok": true })).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, Json(json!({ "error": "unknown_webhook" }))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "unknown_webhook" })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "db_error", "detail": e.to_string() })),
@@ -324,17 +339,18 @@ async fn webhooks_patch(
     }
 }
 
-async fn webhooks_delete(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Response {
+async fn webhooks_delete(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     match state.db.webhook_delete(&id).await {
         Ok(true) => {
             state.webhooks.refresh().await;
             info!("Admin deleted webhook {id}");
             Json(json!({ "ok": true })).into_response()
         }
-        Ok(false) => (StatusCode::NOT_FOUND, Json(json!({ "error": "unknown_webhook" }))).into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "unknown_webhook" })),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "db_error", "detail": e.to_string() })),
@@ -343,10 +359,7 @@ async fn webhooks_delete(
     }
 }
 
-async fn webhooks_test(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Response {
+async fn webhooks_test(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
     match state.webhooks.send_test(&id).await {
         Ok(()) => Json(json!({ "ok": true, "queued": true })).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))).into_response(),

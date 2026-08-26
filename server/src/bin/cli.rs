@@ -40,21 +40,16 @@ enum AuthCommands {
     /// List all API Keys
     List,
     /// Revoke (Deactivate) an API Key
-    Revoke {
-        id: String,
-    },
+    Revoke { id: String },
     /// Toggle Active Status
-    Toggle {
-        id: String,
-        status: bool,
-    },
+    Toggle { id: String, status: bool },
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Load .env if present
     dotenvy::dotenv().ok();
-    
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -96,7 +91,7 @@ async fn get_stats(base_url: &str, key: &str) {
 async fn handle_auth(cmd: AuthCommands, db_url: &str) -> anyhow::Result<()> {
     // If db_url is just "sqlite:adatp.db", sqlx might fail if not resolved absolute path or if file doesn't exist?
     // But let's assume it works or user provides full path.
-    
+
     let pool = SqlitePoolOptions::new()
         .connect(db_url)
         .await
@@ -105,11 +100,15 @@ async fn handle_auth(cmd: AuthCommands, db_url: &str) -> anyhow::Result<()> {
     match cmd {
         AuthCommands::List => {
             use sqlx::Row;
-            let rows = sqlx::query("SELECT id, key, description, is_active, created_at FROM api_keys")
-                .fetch_all(&pool)
-                .await?;
+            let rows =
+                sqlx::query("SELECT id, key, description, is_active, created_at FROM api_keys")
+                    .fetch_all(&pool)
+                    .await?;
 
-            println!("{:<36} | {:<32} | {:<20} | {:<6} | {}", "ID", "Key", "Desc", "Active", "Created");
+            println!(
+                "{:<36} | {:<32} | {:<20} | {:<6} | {}",
+                "ID", "Key", "Desc", "Active", "Created"
+            );
             println!("{}", "-".repeat(120));
             for row in rows {
                 let id: String = row.try_get("id").unwrap_or_default();
@@ -117,7 +116,10 @@ async fn handle_auth(cmd: AuthCommands, db_url: &str) -> anyhow::Result<()> {
                 let description: String = row.try_get("description").unwrap_or_default();
                 let is_active: bool = row.try_get("is_active").unwrap_or(false);
                 let created_at: String = row.try_get("created_at").unwrap_or_default();
-                println!("{:<36} | {:<32} | {:<20} | {:<6} | {}", id, key, description, is_active, created_at);
+                println!(
+                    "{:<36} | {:<32} | {:<20} | {:<6} | {}",
+                    id, key, description, is_active, created_at
+                );
             }
         }
         AuthCommands::Create { description } => {

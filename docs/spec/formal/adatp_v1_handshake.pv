@@ -1,0 +1,57 @@
+(*
+  AdaTP protocol v1 — UNAUTHENTICATED handshake, for contrast.
+  Same X25519 + HKDF + AEAD, but the server signs nothing, so the client
+  cannot bind the exchange to any identity. Expected result: the injective
+  agreement query FAILS — ProVerif reconstructs the classic active MITM
+  (the attacker runs a separate exchange with each side). This is the sanity
+  check that the model has teeth and that v2's signature is what closes the gap.
+
+  STATUS: RUN — as expected, the agreement and secrecy queries are BOTH FALSE:
+  ProVerif reconstructs the active MITM. This is the control that proves the
+  model has teeth (and that v2's signature is what closes the gap). See RESULTS.md.
+*)
+
+free c: channel.
+
+type G. type exp.
+const g: G.
+fun dhexp(G, exp): G.
+equation forall x: exp, y: exp; dhexp(dhexp(g,x),y) = dhexp(dhexp(g,y),x).
+
+type key.
+fun hkdf(G): key.
+fun senc(bitstring, key): bitstring.
+reduc forall m: bitstring, k: key; sdec(senc(m,k), k) = m.
+
+fun h(bitstring): bitstring.
+const LABEL_HS: bitstring.
+
+free secretMsg: bitstring [private].
+query attacker(secretMsg).                (* likely leaks: the MITM holds a key with the client *)
+
+event ServerRan(G, G).
+event ClientDone(G, G).
+query eC: G, eS: G; inj-event(ClientDone(eC, eS)) ==> inj-event(ServerRan(eC, eS)).  (* expected: FALSE *)
+
+let Server() =
+    in(c, (=LABEL_HS, epkC: G));
+    new y: exp;
+    let epkS = dhexp(g, y) in
+    event ServerRan(epkC, epkS);
+    out(c, epkS);                          (* no signature, no identity *)
+    let k = hkdf(dhexp(epkC, y)) in
+    in(c, fin: bitstring);
+    let m = sdec(fin, k) in 0.
+
+let Client() =
+    new x: exp;
+    let epkC = dhexp(g, x) in
+    out(c, (LABEL_HS, epkC));
+    in(c, epkS: G);                        (* accepts ANY epkS — nothing to verify *)
+    let k = hkdf(dhexp(epkS, x)) in
+    event ClientDone(epkC, epkS);
+    out(c, senc((LABEL_HS, h((LABEL_HS, epkC, epkS))), k));
+    out(c, senc(secretMsg, k)).
+
+process
+    ( !Server() | !Client() )

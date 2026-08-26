@@ -1,8 +1,8 @@
-use tokio::net::TcpStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::codec::packet::{Packet, HEADER_SIZE};
 use bytes::BytesMut;
 use std::io;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 pub struct TcpTransport {
     stream: TcpStream,
@@ -21,10 +21,13 @@ impl TcpTransport {
         // Read header first
         while self.buffer.len() < HEADER_SIZE {
             if self.stream.read_buf(&mut self.buffer).await? == 0 {
-                 if self.buffer.is_empty() {
-                     return Ok(None); // Clean disconnect
-                 }
-                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Incomplete header"));
+                if self.buffer.is_empty() {
+                    return Ok(None); // Clean disconnect
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "Incomplete header",
+                ));
             }
         }
 
@@ -32,10 +35,10 @@ impl TcpTransport {
         // Header structure:
         // Magic (4) + Version (1) + Flags (2) + Length (4) ...
         // Length is at offset 4+1+2 = 7 bytes.
-        
+
         let length_slice = &self.buffer[7..11];
         let payload_len = u32::from_le_bytes(length_slice.try_into().unwrap()) as usize;
-        
+
         // We also need to account for AuthTag (16 bytes) if encrypted flag is set.
         // Flags are at offset 4+1=5 (2 bytes).
         let flags_bits = u16::from_le_bytes(self.buffer[5..7].try_into().unwrap());
@@ -48,13 +51,16 @@ impl TcpTransport {
         // Read until we have the full packet
         while self.buffer.len() < total_packet_len {
             if self.stream.read_buf(&mut self.buffer).await? == 0 {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Incomplete packet"));
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "Incomplete packet",
+                ));
             }
         }
 
         // Extract packet bytes
         let packet_bytes = self.buffer.split_to(total_packet_len).freeze();
-        
+
         Packet::from_bytes(packet_bytes)
             .map(Some)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))

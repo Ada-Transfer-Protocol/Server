@@ -74,7 +74,10 @@ pub struct ToolErr {
 
 impl ToolErr {
     fn new(code: &str, message: impl Into<String>) -> Self {
-        Self { code: code.to_string(), message: message.into() }
+        Self {
+            code: code.to_string(),
+            message: message.into(),
+        }
     }
 }
 
@@ -196,7 +199,10 @@ impl PluginManager {
         // Tool name collisions across plugins are rejected.
         for t in &manifest.tools {
             if self.tool_index.contains_key(&t.name) {
-                return Err(format!("tool '{}' already provided by another plugin", t.name));
+                return Err(format!(
+                    "tool '{}' already provided by another plugin",
+                    t.name
+                ));
             }
         }
 
@@ -213,7 +219,10 @@ impl PluginManager {
             self.tool_index.insert(t.name.clone(), name.clone());
         }
         for h in &manifest.hooks {
-            self.hook_index.entry(h.clone()).or_default().push(name.clone());
+            self.hook_index
+                .entry(h.clone())
+                .or_default()
+                .push(name.clone());
         }
 
         self.start(&name).await?;
@@ -243,7 +252,10 @@ impl PluginManager {
         *entry.process.write().await = Some(proc.clone());
         *entry.state.write().await = PluginState::Running;
         *entry.last_error.write().await = None;
-        info!("Plugin '{name}' running ({} tool(s))", entry.manifest.tools.len());
+        info!(
+            "Plugin '{name}' running ({} tool(s))",
+            entry.manifest.tools.len()
+        );
 
         // Crash watcher with restart backoff.
         let mgr = self.clone();
@@ -325,7 +337,11 @@ impl PluginManager {
                     name: e.manifest.name.clone(),
                     version: e.manifest.version.clone(),
                     description: e.manifest.description.clone(),
-                    state: e.state.try_read().map(|s| s.clone()).unwrap_or(PluginState::Errored),
+                    state: e
+                        .state
+                        .try_read()
+                        .map(|s| s.clone())
+                        .unwrap_or(PluginState::Errored),
                     tools: e.manifest.tools.iter().map(|t| t.name.clone()).collect(),
                     hooks: e.manifest.hooks.clone(),
                     permissions: e.manifest.permissions.clone(),
@@ -411,13 +427,18 @@ impl PluginManager {
                 *slot = (minute, 0);
             }
             if slot.1 >= spec.rate_limit_per_min {
-                return Err(ToolErr::new("tool_rate_limited", "rate limit exceeded, retry later"));
+                return Err(ToolErr::new(
+                    "tool_rate_limited",
+                    "rate limit exceeded, retry later",
+                ));
             }
             slot.1 += 1;
         }
 
         // Argument validation (size + schema subset).
-        let args_size = serde_json::to_vec(&args).map(|v| v.len()).unwrap_or(usize::MAX);
+        let args_size = serde_json::to_vec(&args)
+            .map(|v| v.len())
+            .unwrap_or(usize::MAX);
         if args_size > MAX_TOOL_ARGS_BYTES {
             return Err(ToolErr::new("tool_invalid_args", "args exceed 64 KiB"));
         }
@@ -450,18 +471,28 @@ impl PluginManager {
             )
             .await;
         let elapsed = started.elapsed().as_millis() as u64;
-        entry.metrics.latency_ms_total.fetch_add(elapsed, Ordering::Relaxed);
+        entry
+            .metrics
+            .latency_ms_total
+            .fetch_add(elapsed, Ordering::Relaxed);
 
         let outcome = match reply {
             Ok(v) => match v.get("op").and_then(|o| o.as_str()) {
                 Some("tool_result") => Ok(v.get("result").cloned().unwrap_or(Value::Null)),
                 Some("tool_error") => Err(ToolErr::new(
-                    v.get("code").and_then(|c| c.as_str()).unwrap_or("tool_failed"),
-                    v.get("message").and_then(|m| m.as_str()).unwrap_or("tool error"),
+                    v.get("code")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("tool_failed"),
+                    v.get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("tool error"),
                 )),
                 _ => Err(ToolErr::new("tool_failed", "malformed plugin reply")),
             },
-            Err(e) if e == "timeout" => Err(ToolErr::new("tool_timeout", format!("no reply within {}ms", spec.timeout_ms))),
+            Err(e) if e == "timeout" => Err(ToolErr::new(
+                "tool_timeout",
+                format!("no reply within {}ms", spec.timeout_ms),
+            )),
             Err(e) => Err(ToolErr::new("tool_failed", e)),
         };
 
@@ -485,7 +516,10 @@ impl PluginManager {
     // ------------------------------------------------------------------
 
     pub fn has_hook(&self, hook: &str) -> bool {
-        self.hook_index.get(hook).map(|v| !v.is_empty()).unwrap_or(false)
+        self.hook_index
+            .get(hook)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
     }
 
     /// Dispatches a veto-able hook. Returns true when EVERY registered
@@ -542,8 +576,10 @@ impl PluginManager {
         for name in plugin_names {
             if let Some(entry) = self.plugins.get(&name) {
                 if let Some(proc) = entry.process.read().await.clone() {
-                    proc.notify(json!({ "op": "hook", "hook": hook, "event": event, "notify": true }))
-                        .await;
+                    proc.notify(
+                        json!({ "op": "hook", "hook": hook, "event": event, "notify": true }),
+                    )
+                    .await;
                 }
             }
         }
@@ -554,8 +590,10 @@ impl PluginManager {
         for entry in self.plugins.iter() {
             *entry.state.write().await = PluginState::Disabled;
             if let Some(proc) = entry.process.write().await.take() {
-                proc.notify(json!({ "op": "hook", "hook": "shutdown", "event": {}, "notify": true }))
-                    .await;
+                proc.notify(
+                    json!({ "op": "hook", "hook": "shutdown", "event": {}, "notify": true }),
+                )
+                .await;
                 proc.shutdown(1000).await;
             }
         }

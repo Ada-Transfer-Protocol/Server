@@ -1,8 +1,8 @@
 use bytes::{Buf, BufMut, Bytes};
 use serde::{Deserialize, Serialize};
 
-use uuid::Uuid;
 use bitflags::bitflags;
+use uuid::Uuid;
 
 pub const MAGIC_NUMBER: u32 = 0x41444154; // "ADAT"
 pub const HEADER_SIZE: usize = 4 + 1 + 2 + 4 + 8 + 2 + 8 + 16; // 45 bytes
@@ -77,6 +77,10 @@ pub enum MessageType {
     // Rooms
     JoinRoom = 0x00A0,
     RoomJoined = 0x00A1,
+    /// Client-to-client event (a "whisper"): fanned out to the *other* members
+    /// of the sender's private/presence room, never echoed to the sender and
+    /// never persisted. Event names must be `client-*`.
+    ClientEvent = 0x00A2,
 
     Disconnect = 0x00FF,
 
@@ -87,45 +91,46 @@ pub enum MessageType {
 impl From<u16> for MessageType {
     fn from(v: u16) -> Self {
         match v {
-             0x0001 => MessageType::HandshakeInit,
-             0x0002 => MessageType::HandshakeResponse,
-             0x0003 => MessageType::HandshakeComplete,
-             0x0010 => MessageType::AuthRequest,
-             0x0011 => MessageType::AuthChallenge,
-             0x0012 => MessageType::AuthResponse,
-             0x0013 => MessageType::AuthSuccess,
-             0x0014 => MessageType::AuthFailure,
+            0x0001 => MessageType::HandshakeInit,
+            0x0002 => MessageType::HandshakeResponse,
+            0x0003 => MessageType::HandshakeComplete,
+            0x0010 => MessageType::AuthRequest,
+            0x0011 => MessageType::AuthChallenge,
+            0x0012 => MessageType::AuthResponse,
+            0x0013 => MessageType::AuthSuccess,
+            0x0014 => MessageType::AuthFailure,
             0x0020 => MessageType::TextMessage,
-             0x0021 => MessageType::TextAck,
-             0x0022 => MessageType::TextRead,
-             0x0030 => MessageType::FileInit,
-             0x0031 => MessageType::FileChunk,
-             0x0032 => MessageType::FileAck,
-             0x0033 => MessageType::FileComplete,
-             0x0034 => MessageType::FileCancel,
-             0x0040 => MessageType::VoiceInit,
-             0x0041 => MessageType::VoiceOffer,
-             0x0042 => MessageType::VoiceAnswer,
-             0x0043 => MessageType::VoiceIce,
-             0x0044 => MessageType::VoiceData,
-             0x0045 => MessageType::VoiceEnd,
-             0x0050 => MessageType::GameState,
-             0x0060 => MessageType::PresenceUpdate,
-             0x0061 => MessageType::TypingIndicator,
-             0x0070 => MessageType::ToolCall,
-             0x0071 => MessageType::ToolResult,
-             0x0072 => MessageType::ToolError,
-             0x0080 => MessageType::Ping,
-             0x0081 => MessageType::Pong,
-             0x0090 => MessageType::VideoInit,
-             0x0091 => MessageType::VideoOffer,
-             0x0092 => MessageType::VideoAnswer,
-             0x0093 => MessageType::VideoData,
-             0x0094 => MessageType::VideoEnd,
-             0x00A0 => MessageType::JoinRoom,
-             0x00A1 => MessageType::RoomJoined,
-             0x00FF => MessageType::Disconnect,
-             _ => MessageType::Unknown,
+            0x0021 => MessageType::TextAck,
+            0x0022 => MessageType::TextRead,
+            0x0030 => MessageType::FileInit,
+            0x0031 => MessageType::FileChunk,
+            0x0032 => MessageType::FileAck,
+            0x0033 => MessageType::FileComplete,
+            0x0034 => MessageType::FileCancel,
+            0x0040 => MessageType::VoiceInit,
+            0x0041 => MessageType::VoiceOffer,
+            0x0042 => MessageType::VoiceAnswer,
+            0x0043 => MessageType::VoiceIce,
+            0x0044 => MessageType::VoiceData,
+            0x0045 => MessageType::VoiceEnd,
+            0x0050 => MessageType::GameState,
+            0x0060 => MessageType::PresenceUpdate,
+            0x0061 => MessageType::TypingIndicator,
+            0x0070 => MessageType::ToolCall,
+            0x0071 => MessageType::ToolResult,
+            0x0072 => MessageType::ToolError,
+            0x0080 => MessageType::Ping,
+            0x0081 => MessageType::Pong,
+            0x0090 => MessageType::VideoInit,
+            0x0091 => MessageType::VideoOffer,
+            0x0092 => MessageType::VideoAnswer,
+            0x0093 => MessageType::VideoData,
+            0x0094 => MessageType::VideoEnd,
+            0x00A0 => MessageType::JoinRoom,
+            0x00A1 => MessageType::RoomJoined,
+            0x00A2 => MessageType::ClientEvent,
+            0x00FF => MessageType::Disconnect,
+            _ => MessageType::Unknown,
         }
     }
 }
@@ -157,6 +162,30 @@ impl Default for PacketHeader {
     }
 }
 
+impl PacketHeader {
+    /// The 45-byte header, serialized exactly as it appears on the wire.
+    ///
+    /// Used for framing (via [`Packet::to_bytes`]) and, in **protocol v2**, as
+    /// the AEAD **additional authenticated data**: binding these bytes to the
+    /// ciphertext tag means `msg_type`, `sequence`, `session_id`, `flags`, etc.
+    /// cannot be altered by an on-path attacker without failing decryption
+    /// (v1 uses empty AAD and is unaffected). Both peers derive identical bytes:
+    /// the sender knows every field before sealing (GCM adds no length), and the
+    /// receiver re-serializes the header it parsed off the wire.
+    pub fn header_bytes(&self) -> [u8; HEADER_SIZE] {
+        let mut buf = [0u8; HEADER_SIZE];
+        buf[0..4].copy_from_slice(&self.magic.to_le_bytes());
+        buf[4] = self.version;
+        buf[5..7].copy_from_slice(&self.flags.bits().to_le_bytes());
+        buf[7..11].copy_from_slice(&self.length.to_le_bytes());
+        buf[11..19].copy_from_slice(&self.sequence.to_le_bytes());
+        buf[19..21].copy_from_slice(&(self.msg_type as u16).to_le_bytes());
+        buf[21..29].copy_from_slice(&self.timestamp.to_le_bytes());
+        buf[29..45].copy_from_slice(self.session_id.as_bytes());
+        buf
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Packet {
     pub header: PacketHeader,
@@ -179,17 +208,12 @@ impl Packet {
     }
 
     pub fn to_bytes(&self) -> Bytes {
-        let mut buf = Vec::with_capacity(HEADER_SIZE + self.payload.len() + if self.auth_tag.is_some() { 16 } else { 0 });
-        
-        // Write Header
-        buf.put_u32_le(self.header.magic);
-        buf.put_u8(self.header.version);
-        buf.put_u16_le(self.header.flags.bits());
-        buf.put_u32_le(self.header.length);
-        buf.put_u64_le(self.header.sequence);
-        buf.put_u16_le(self.header.msg_type as u16);
-        buf.put_u64_le(self.header.timestamp);
-        buf.put_slice(self.header.session_id.as_bytes());
+        let mut buf = Vec::with_capacity(
+            HEADER_SIZE + self.payload.len() + if self.auth_tag.is_some() { 16 } else { 0 },
+        );
+
+        // Write Header (identical bytes are used as the v2 AEAD AAD).
+        buf.put_slice(&self.header.header_bytes());
 
         // Write Payload
         buf.put_slice(&self.payload);
@@ -220,7 +244,7 @@ impl Packet {
         let msg_type_u16 = data.get_u16_le();
         let msg_type = MessageType::from(msg_type_u16);
         let timestamp = data.get_u64_le();
-        
+
         let mut uuid_bytes = [0u8; 16];
         data.copy_to_slice(&mut uuid_bytes);
         let session_id = Uuid::from_bytes(uuid_bytes);
@@ -233,12 +257,12 @@ impl Packet {
         let payload = data.split_to(length as usize);
 
         let auth_tag = if flags.contains(PacketFlags::ENCRYPTED) {
-             if data.len() < 16 {
-                 return Err("Missing auth tag");
-             }
-             let mut tag = [0u8; 16];
-             data.copy_to_slice(&mut tag);
-             Some(tag)
+            if data.len() < 16 {
+                return Err("Missing auth tag");
+            }
+            let mut tag = [0u8; 16];
+            data.copy_to_slice(&mut tag);
+            Some(tag)
         } else {
             None
         };
