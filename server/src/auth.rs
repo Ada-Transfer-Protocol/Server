@@ -327,14 +327,21 @@ mod tests {
     }
 
     fn write_temp_users(contents: &str) -> String {
+        // A process-unique counter guarantees distinct filenames even when two
+        // parallel tests hit the same clock tick (macOS has a coarser clock than
+        // Linux, so a pid+nanos-only name could collide and one test's file would
+        // clobber another's).
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
         let mut path = std::env::temp_dir();
         let unique = format!(
-            "adatp-users-{}-{}.json",
+            "adatp-users-{}-{}-{}.json",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
         );
         path.push(unique);
         std::fs::write(&path, contents).unwrap();
