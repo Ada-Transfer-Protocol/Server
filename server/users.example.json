@@ -10,5 +10,12 @@
         "username": "change-me-user",
         "password": "CHANGE_ME_too",
         "role": "user"
+    },
+    {
+        "_comment": "Optional 'token' enables single-credential auth: a client may authenticate as this user with auth_string = the token (no username/password). Use a long random value.",
+        "username": "service-bot",
+        "password": "CHANGE_ME_too",
+        "token": "CHANGE_ME_to_a_long_random_token",
+        "role": "bot"
     }
 ]

@@ -103,3 +103,16 @@ Verify what the server actually loaded (non-secret view):
 ```bash
 curl -s -H "x-admin-token: $ADMIN_TOKEN" http://127.0.0.1:3000/admin/v1/config
 ```
+
+## Authenticated handshake, backplane & publish (v1.2+)
+
+| Variable | Default | Type | Effect |
+| :-- | :-- | :-- | :-- |
+| `ADATP_IDENTITY_PATH` | `adatp-identity.key` | path | File holding the server's long-term Ed25519 identity seed for the v2 authenticated handshake. Generated (0600) on first boot; its public key is what clients pin. Its fingerprint is logged at startup. |
+| `ADATP_MIN_PROTOCOL_VERSION` | `1` | u8 | Minimum handshake version. **Set to `2` to require the authenticated v2 handshake** and reject v1 (the downgrade defense). Default stays `1` for back-compat until every SDK speaks v2. |
+| `ADATP_BACKPLANE_URL` | — | URL | `redis://host:port` for the multi-node routing backplane (active-active rooms). Unset = single-node (in-process routing only). Fail-closed at boot if set but unreachable. |
+| `ADATP_PUBLISH_SECRET` | — | secret | HMAC secret for the HTTP publish endpoint (`POST /publish`, see [publish-api.md](../platform/publish-api.md)). Unset = the endpoint is disabled (503). |
+
+The `api` auth driver also forwards an optional `auth_string` in the POST body
+(`{username, password, auth_string}`) so a client can authenticate with a single
+token; the `file` driver matches `auth_string` against a user's optional `token`.

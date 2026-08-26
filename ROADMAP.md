@@ -179,6 +179,45 @@ and nothing else fits"* never needs a 10/10 badge.
 
 ---
 
+## Realtime-platform track (broadcast transport / Reverb-parity)
+
+Making AdaTP usable as a drop-in realtime backbone (app-server publish, Laravel
+Reverb parity, cluster scale). Kept honest: shipped vs planned, separated.
+
+**Shipped + verified:**
+- **HTTP publish endpoint** — `POST /publish`, HMAC-SHA256 signed over
+  `<ts>.<body>` with a replay window, single or batch, per-room delivery counts;
+  `server/src/publish.rs`. An app server fans out to rooms without a socket.
+- **Sender exclusion** (`->toOthers()`) — `hub::broadcast_publish(exclude_session)`,
+  honoured cluster-wide (carried in the backplane envelope).
+- **Multi-node backplane** — Redis pub/sub, active-active rooms, cross-node
+  verified (`tests/backplane/`). Manageable from the Cloud admin + customer panels.
+- **`auth_string`** — single-credential auth across the server (none / file-token /
+  webhook) and the Node/C/Python/PHP SDKs, verified e2e.
+
+**Planned (named, not built):**
+- **Per-channel authorization** (`/broadcasting/auth` grant on `JoinRoom`),
+  **presence** (member map, `member_added`/`removed`, cluster-wide), and
+  **client events** (`client-*` peer relay) — the rest of Reverb parity.
+- **`adatp-laravel`** broadcast driver + device-fleet client; **`adatp-echo`**
+  Laravel Echo connector + a parity suite against Reverb.
+- **Cloud**: per-project auth "middleware" config pushed to nodes; admin
+  "log in as customer"; **Caddy** reverse proxy with per-node subdomains
+  (`[prefix]-customer-node` / `-official`), automatic domain + SSL, and an
+  "AdaTP is actually installed" check before wiring a node.
+- **Backplane adapters** beyond Redis (NATS / others) selectable per deployment.
+- **Connection-state recovery** — Redis-Streams offsets + `JoinRoom since_offset`
+  so a reconnecting client replays what it missed (the honest wording is
+  "message recovery on reconnect", not "seamless failover").
+- **Callback ack + timeout** (configurable) and an **HTTP long-polling fallback**
+  when WebSocket is unavailable.
+
+Until the parity items land, a migration guide must say plainly that Reverb is
+still ahead on presence, client events and mature reconnect — hiding that is the
+kind of claim this document exists to forbid.
+
+---
+
 *This document describes what is shipped, what is planned, and what would take
 outside resources — and keeps those three clearly separated. That separation is
 the point.*
