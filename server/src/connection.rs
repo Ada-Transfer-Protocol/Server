@@ -508,7 +508,11 @@ async fn handle_packet(
                 }
             };
 
-            match state.auth.verify(&body.username, &body.password).await {
+            match state
+                .auth
+                .verify(&body.username, &body.password, body.auth_string.as_deref())
+                .await
+            {
                 Ok(user) => {
                     // Policy plugins may veto an otherwise-valid login.
                     if state.plugins.has_hook("auth") {

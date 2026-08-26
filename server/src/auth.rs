@@ -25,10 +25,21 @@ pub enum AuthError {
 }
 
 /// Payload of an `AuthRequest` packet (JSON).
-#[derive(Deserialize)]
+///
+/// A client may authenticate with a username+password pair, or with a single
+/// opaque `auth_string` (a token/API key/session string), or with nothing at
+/// all on a passwordless (`none`) server. All three are optional so an SDK can
+/// send whichever the deployment's auth mode expects.
+#[derive(Deserialize, Default)]
 pub struct AuthRequestBody {
+    #[serde(default)]
     pub username: String,
+    #[serde(default)]
     pub password: String,
+    /// Single-credential auth (bearer/token/session), an alternative to
+    /// username+password. Verified by the configured driver.
+    #[serde(default)]
+    pub auth_string: Option<String>,
 }
 
 /// One entry of the `users.json` file driver.
@@ -40,6 +51,10 @@ pub struct AuthRequestBody {
 struct FileUser {
     username: String,
     password: String,
+    /// Optional single-credential token. When set, a client may authenticate as
+    /// this user by presenting `auth_string` = this token (no username needed).
+    #[serde(default)]
+    token: Option<String>,
     #[serde(default = "default_role")]
     role: String,
 }
@@ -183,19 +198,51 @@ impl AuthManager {
         }
     }
 
-    /// Verify credentials against the configured driver.
-    pub async fn verify(&self, username: &str, password: &str) -> Result<AuthUser, AuthError> {
-        if username.is_empty() {
+    /// Verify credentials against the configured driver. A client may present a
+    /// username+password, or a single `auth_string` token, or (on the `none`
+    /// driver) nothing.
+    pub async fn verify(
+        &self,
+        username: &str,
+        password: &str,
+        auth_string: Option<&str>,
+    ) -> Result<AuthUser, AuthError> {
+        let auth_string = auth_string.filter(|s| !s.is_empty());
+        // Reject only when there is nothing to check at all — except on `none`,
+        // which is passwordless by design.
+        if self.driver != AuthDriver::None && username.is_empty() && auth_string.is_none() {
             return Err(AuthError::InvalidCredentials);
         }
         match self.driver {
-            AuthDriver::None => Ok(AuthUser {
-                user_id: username.to_string(),
-                username: username.to_string(),
-                role: "anonymous".to_string(),
-            }),
+            AuthDriver::None => {
+                let name = if !username.is_empty() {
+                    username
+                } else {
+                    "anonymous"
+                };
+                Ok(AuthUser {
+                    user_id: name.to_string(),
+                    username: name.to_string(),
+                    role: "anonymous".to_string(),
+                })
+            }
             AuthDriver::File => {
                 let users = self.users.read().await;
+                // auth_string path: match against any user's configured token.
+                if let Some(tok) = auth_string {
+                    for u in users.values() {
+                        if let Some(t) = &u.token {
+                            if !t.is_empty() && ct_eq(t.as_bytes(), tok.as_bytes()) {
+                                return Ok(AuthUser {
+                                    user_id: u.username.clone(),
+                                    username: u.username.clone(),
+                                    role: u.role.clone(),
+                                });
+                            }
+                        }
+                    }
+                    return Err(AuthError::InvalidCredentials);
+                }
                 match users.get(username) {
                     Some(u) if ct_eq(u.password.as_bytes(), password.as_bytes()) => Ok(AuthUser {
                         user_id: u.username.clone(),
@@ -210,10 +257,16 @@ impl AuthManager {
                     .api_url
                     .as_ref()
                     .ok_or_else(|| AuthError::Unavailable("AUTH_API_URL unset".into()))?;
+                // Forward all three to the external verifier (the webhook decides
+                // which it needs). This is the "connect to a webhook" auth mode.
                 let resp = self
                     .http
                     .post(url)
-                    .json(&serde_json::json!({ "username": username, "password": password }))
+                    .json(&serde_json::json!({
+                        "username": username,
+                        "password": password,
+                        "auth_string": auth_string,
+                    }))
                     .timeout(std::time::Duration::from_secs(5))
                     .send()
                     .await
@@ -227,8 +280,13 @@ impl AuthManager {
                     .await
                     .map_err(|e| AuthError::Unavailable(format!("bad auth response: {e}")))?;
                 if body.authorized {
+                    let fallback = if !username.is_empty() {
+                        username
+                    } else {
+                        "user"
+                    };
                     Ok(AuthUser {
-                        user_id: body.user_id.unwrap_or_else(|| username.to_string()),
+                        user_id: body.user_id.unwrap_or_else(|| fallback.to_string()),
                         username: username.to_string(),
                         role: body.role.unwrap_or_else(|| "user".to_string()),
                     })
@@ -289,7 +347,10 @@ mod tests {
         let auth = AuthManager::new(&cfg).expect("file driver loads a non-empty user file");
 
         // Correct credentials authenticate and carry the declared role.
-        let user = auth.verify("alice", "s3cret").await.expect("valid login");
+        let user = auth
+            .verify("alice", "s3cret", None)
+            .await
+            .expect("valid login");
         assert_eq!(user.username, "alice");
         assert_eq!(user.role, "user");
 
@@ -298,11 +359,40 @@ mod tests {
 
         // Wrong password and unknown user are both rejected.
         assert!(matches!(
-            auth.verify("alice", "nope").await,
+            auth.verify("alice", "nope", None).await,
             Err(AuthError::InvalidCredentials)
         ));
         assert!(matches!(
-            auth.verify("mallory", "whatever").await,
+            auth.verify("mallory", "whatever", None).await,
+            Err(AuthError::InvalidCredentials)
+        ));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn file_driver_auth_string_token() {
+        // A user with a `token` authenticates via auth_string alone (no username).
+        let path = write_temp_users(
+            r#"[{"username":"svc","password":"x","token":"tok_abc123","role":"bot"}]"#,
+        );
+        let cfg = cfg_for(&path, AuthDriver::File);
+        let auth = AuthManager::new(&cfg).expect("file driver loads");
+
+        let user = auth
+            .verify("", "", Some("tok_abc123"))
+            .await
+            .expect("valid token authenticates");
+        assert_eq!(user.username, "svc");
+        assert_eq!(user.role, "bot");
+
+        // A wrong token is rejected; empty credentials with no token are rejected.
+        assert!(matches!(
+            auth.verify("", "", Some("tok_wrong")).await,
+            Err(AuthError::InvalidCredentials)
+        ));
+        assert!(matches!(
+            auth.verify("", "", None).await,
             Err(AuthError::InvalidCredentials)
         ));
 
@@ -333,7 +423,17 @@ mod tests {
         // Finding 5 must not weaken the `none` driver.
         let cfg = cfg_for("unused.json", AuthDriver::None);
         let auth = AuthManager::new(&cfg).expect("none driver never touches a file");
-        let user = auth.verify("guest", "").await.expect("anonymous accepted");
+        let user = auth
+            .verify("guest", "", None)
+            .await
+            .expect("anonymous accepted");
         assert_eq!(user.role, "anonymous");
+
+        // Passwordless: even with no username at all, `none` admits (anonymous).
+        let anon = auth
+            .verify("", "", None)
+            .await
+            .expect("passwordless accepted");
+        assert_eq!(anon.role, "anonymous");
     }
 }
