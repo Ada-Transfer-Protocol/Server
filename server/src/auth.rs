@@ -323,6 +323,8 @@ mod tests {
             min_protocol_version: 1,
             backplane_url: None,
             publish_secret: None,
+            channel_auth_secret: None,
+            private_prefixes: vec!["private-".into(), "presence-".into()],
         }
     }
 
