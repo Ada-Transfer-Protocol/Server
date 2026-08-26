@@ -374,10 +374,11 @@ fn valid_room_name(name: &str) -> bool {
 }
 
 /// Parse a JoinRoom payload. Back-compatible: a bare UTF-8 string is the room
-/// name; a JSON object `{"room":"...","grant":"..."}` additionally carries a
-/// channel-auth grant for a private/presence room. Returns `(room, grant?)`;
-/// an empty room signals a malformed payload (rejected upstream).
-fn parse_join_payload(bytes: &[u8]) -> (String, Option<String>) {
+/// name; a JSON object `{"room":"...","grant":"...","recover":true}` additionally
+/// carries a channel-auth grant and/or a request to replay missed messages on
+/// reconnect. Returns `(room, grant?, recover)`; an empty room signals a
+/// malformed payload (rejected upstream).
+fn parse_join_payload(bytes: &[u8]) -> (String, Option<String>, bool) {
     let first = bytes.iter().find(|b| !b.is_ascii_whitespace());
     if first == Some(&b'{') {
         #[derive(serde::Deserialize)]
@@ -385,15 +386,17 @@ fn parse_join_payload(bytes: &[u8]) -> (String, Option<String>) {
             room: String,
             #[serde(default)]
             grant: Option<String>,
+            #[serde(default)]
+            recover: bool,
         }
         return match serde_json::from_slice::<JoinBody>(bytes) {
-            Ok(b) => (b.room, b.grant),
-            Err(_) => (String::new(), None),
+            Ok(b) => (b.room, b.grant, b.recover),
+            Err(_) => (String::new(), None, false),
         };
     }
     match std::str::from_utf8(bytes) {
-        Ok(s) => (s.to_string(), None),
-        Err(_) => (String::new(), None),
+        Ok(s) => (s.to_string(), None, false),
+        Err(_) => (String::new(), None, false),
     }
 }
 
@@ -694,7 +697,7 @@ async fn handle_packet(
             // The JoinRoom payload is either a bare room name, or a JSON object
             // { "room": "...", "grant": "..." } carrying a channel-auth grant for
             // a private/presence room (the socket side of /broadcasting/auth).
-            let (room, grant_token) = parse_join_payload(&plaintext);
+            let (room, grant_token, recover) = parse_join_payload(&plaintext);
             if !valid_room_name(&room) {
                 let _ = send_direct(
                     state,
@@ -861,6 +864,28 @@ async fn handle_packet(
                 if !send_direct(state, conn, ws_tx, MessageType::RoomJoined, room.as_bytes()).await
                 {
                     return Flow::Close("write_error");
+                }
+
+                // --- Connection-state recovery -------------------------------
+                // The client is now a room member, so nothing sent from here on is
+                // lost. Replay the TextMessages this *session* missed while
+                // disconnected. Best-effort: a single message at the reconnect
+                // boundary may arrive both replayed and live, which clients dedup
+                // by id. Recovery is node-local (same as presence).
+                if recover {
+                    let missed = state.hub.resume(conn.sid(), hub_id, &room);
+                    if !missed.is_empty() {
+                        info!(
+                            "replaying {} missed message(s) to reconnecting session in '{}'",
+                            missed.len(),
+                            room
+                        );
+                    }
+                    for m in missed {
+                        if !send_direct(state, conn, ws_tx, m.msg_type, &m.payload).await {
+                            return Flow::Close("write_error");
+                        }
+                    }
                 }
 
                 // --- Rich presence (presence-* rooms) ------------------------
