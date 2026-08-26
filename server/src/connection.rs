@@ -1099,7 +1099,7 @@ async fn handle_packet(
                 state.plugins.notify_hook("presence", &event).await;
             }
 
-            state.hub.broadcast(
+            let delivered = state.hub.broadcast(
                 &conn.room,
                 RouteMsg {
                     sender: conn.sid(),
@@ -1107,6 +1107,25 @@ async fn handle_packet(
                     payload: Bytes::from(plaintext),
                 },
             );
+
+            // Delivery ack: a client that set the RELIABLE flag on a TextMessage
+            // gets a TextAck back confirming receipt and the local fan-out count,
+            // correlated by the message's sequence. Opt-in — plain sends are
+            // fire-and-forget as before. (Count is local; cross-node fan-out is
+            // best-effort, same as the publish endpoint.)
+            if t == MessageType::TextMessage && packet.header.flags.contains(PacketFlags::RELIABLE)
+            {
+                // seq as a string: a u64 sequence can exceed JS's safe-integer
+                // range, and the client correlates by exact decimal string.
+                let ack = serde_json::json!({
+                    "seq": packet.header.sequence.to_string(),
+                    "delivered": delivered,
+                })
+                .to_string();
+                if !send_direct(state, conn, ws_tx, MessageType::TextAck, ack.as_bytes()).await {
+                    return Flow::Close("write_error");
+                }
+            }
             Flow::Continue
         }
 

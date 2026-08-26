@@ -344,9 +344,10 @@ impl Hub {
     /// (clients rely on their own echo, e.g. for RTT measurement), and forward
     /// it to the backplane so members on other nodes receive it too.
     /// Slow consumers whose queues are full lose the message (counted).
-    pub fn broadcast(&self, room: &str, msg: RouteMsg) {
-        self.deliver_local(room, &msg, None, None);
+    pub fn broadcast(&self, room: &str, msg: RouteMsg) -> usize {
+        let n = self.deliver_local(room, &msg, None, None);
         self.forward_to_backplane(room, &msg, None);
+        n
     }
 
     /// Like `broadcast`, but skips `except` locally (e.g. a join announcement the
