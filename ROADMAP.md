@@ -194,11 +194,27 @@ Reverb parity, cluster scale). Kept honest: shipped vs planned, separated.
   verified (`tests/backplane/`). Manageable from the Cloud admin + customer panels.
 - **`auth_string`** — single-credential auth across the server (none / file-token /
   webhook) and the Node/C/Python/PHP SDKs, verified e2e.
+- **Per-channel authorization** — a `private-`/`presence-` room requires a grant
+  the app server signs (HMAC-SHA256 over the exact payload: room + session id +
+  expiry [+ presence identity]); the client presents it on `JoinRoom` as
+  `{room, grant}` and the hub verifies signature, expiry, room and session before
+  admitting the join (`server/src/channel_auth.rs`). Verified e2e: public joins
+  free, private rejected without a grant, joined with a valid one.
+- **Presence** — `presence-*` rooms keep a member roster (deduped by `user_id`,
+  identity taken only from the signed grant). The joiner receives
+  `presence:here`; the room is told `presence:member_added` on a user's first
+  session and `presence:member_removed` when their last session leaves
+  (`hub::presence_join`/`presence_leave`). Verified e2e with two clients.
+  **Node-local** for now — cross-node presence is still ahead (see below).
+- **Client events** (whispers) — `client.whisper()` relays a `client-*` event to
+  the *other* members of a private/presence room, never the sender, never
+  persisted; dropped on public rooms and for non-`client-*` names
+  (`MessageType::ClientEvent`). Verified e2e (delivery, no self-echo, public drop).
 
 **Planned (named, not built):**
-- **Per-channel authorization** (`/broadcasting/auth` grant on `JoinRoom`),
-  **presence** (member map, `member_added`/`removed`, cluster-wide), and
-  **client events** (`client-*` peer relay) — the rest of Reverb parity.
+- **Cross-node presence** — the roster is currently per-node; making
+  `member_added`/`removed` and the `here` roster span the fleet needs the
+  backplane to carry presence deltas + a shared roster store.
 - **`adatp-laravel`** broadcast driver + device-fleet client; **`adatp-echo`**
   Laravel Echo connector + a parity suite against Reverb.
 - **Cloud**: per-project auth "middleware" config pushed to nodes; admin
@@ -212,9 +228,11 @@ Reverb parity, cluster scale). Kept honest: shipped vs planned, separated.
 - **Callback ack + timeout** (configurable) and an **HTTP long-polling fallback**
   when WebSocket is unavailable.
 
-Until the parity items land, a migration guide must say plainly that Reverb is
-still ahead on presence, client events and mature reconnect — hiding that is the
-kind of claim this document exists to forbid.
+The single-node channel semantics (auth, presence, client events) now match
+Reverb; a migration guide must still say plainly where AdaTP is behind —
+**cross-node presence**, **mature reconnect/state-recovery**, and the
+**`adatp-laravel`/`adatp-echo`** packages themselves — hiding that is the kind
+of claim this document exists to forbid.
 
 ---
 
