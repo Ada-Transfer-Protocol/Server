@@ -70,6 +70,14 @@ pub struct Config {
     /// requests must carry `x-adatp-signature: sha256=<hmac>` over
     /// `<timestamp>.<body>` and a fresh `x-adatp-timestamp` (replay window).
     pub publish_secret: Option<String>,
+    /// Shared secret for per-channel authorization grants (Laravel's
+    /// `/broadcasting/auth`). `ADATP_CHANNEL_AUTH_SECRET`. Unset = grants are not
+    /// verified (no private/presence enforcement).
+    pub channel_auth_secret: Option<String>,
+    /// Room-name prefixes that REQUIRE a valid channel-auth grant to join.
+    /// `ADATP_PRIVATE_PREFIX` (comma-separated), default `private-,presence-`.
+    /// A join to a matching room without a valid grant is refused (room_forbidden).
+    pub private_prefixes: Vec<String>,
 }
 
 impl Config {
@@ -168,6 +176,17 @@ impl Config {
             .ok()
             .filter(|s| !s.is_empty());
 
+        let channel_auth_secret = env::var("ADATP_CHANNEL_AUTH_SECRET")
+            .ok()
+            .filter(|s| !s.is_empty());
+
+        let private_prefixes: Vec<String> = env::var("ADATP_PRIVATE_PREFIX")
+            .unwrap_or_else(|_| "private-,presence-".to_string())
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
         Self {
             host,
             port,
@@ -187,11 +206,23 @@ impl Config {
             min_protocol_version,
             backplane_url,
             publish_secret,
+            channel_auth_secret,
+            private_prefixes,
         }
     }
 
     pub fn bind_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
+    }
+
+    /// True when `room` is a private/presence channel that requires a verified
+    /// channel-auth grant to join (and a channel-auth secret is configured).
+    pub fn room_requires_grant(&self, room: &str) -> bool {
+        self.channel_auth_secret.is_some()
+            && self
+                .private_prefixes
+                .iter()
+                .any(|p| room.starts_with(p.as_str()))
     }
 
     /// Built-in room-join policy, enforced before a join takes effect and
@@ -238,6 +269,8 @@ mod tests {
             min_protocol_version: 1,
             backplane_url: None,
             publish_secret: None,
+            channel_auth_secret: None,
+            private_prefixes: vec!["private-".into(), "presence-".into()],
         }
     }
 

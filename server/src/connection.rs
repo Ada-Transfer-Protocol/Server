@@ -114,6 +114,9 @@ struct ConnState {
     authed: Option<AuthUser>,
     hub_id: Option<ConnId>,
     room: String,
+    /// Verified channel-auth grant for the current private/presence room, if any.
+    /// Its `user_info` is the trusted source of presence identity.
+    channel_grant: Option<crate::channel_auth::Grant>,
     auth_attempts: u8,
     preauth_violations: u8,
     /// Inbound message rate limiter (per connection).
@@ -130,6 +133,7 @@ impl ConnState {
             authed: None,
             hub_id: None,
             room: "global".to_string(),
+            channel_grant: None,
             auth_attempts: 0,
             preauth_violations: 0,
             rate: RateLimiter::new(msg_rate_limit),
@@ -344,6 +348,30 @@ fn is_routable(t: MessageType) -> bool {
 fn valid_room_name(name: &str) -> bool {
     let len = name.len();
     (1..=128).contains(&len) && !name.chars().any(|c| c.is_control())
+}
+
+/// Parse a JoinRoom payload. Back-compatible: a bare UTF-8 string is the room
+/// name; a JSON object `{"room":"...","grant":"..."}` additionally carries a
+/// channel-auth grant for a private/presence room. Returns `(room, grant?)`;
+/// an empty room signals a malformed payload (rejected upstream).
+fn parse_join_payload(bytes: &[u8]) -> (String, Option<String>) {
+    let first = bytes.iter().find(|b| !b.is_ascii_whitespace());
+    if first == Some(&b'{') {
+        #[derive(serde::Deserialize)]
+        struct JoinBody {
+            room: String,
+            #[serde(default)]
+            grant: Option<String>,
+        }
+        return match serde_json::from_slice::<JoinBody>(bytes) {
+            Ok(b) => (b.room, b.grant),
+            Err(_) => (String::new(), None),
+        };
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(s) => (s.to_string(), None),
+        Err(_) => (String::new(), None),
+    }
 }
 
 async fn handle_packet(
@@ -640,20 +668,21 @@ async fn handle_packet(
                 Ok(p) => p,
                 Err(_) => return Flow::Close("decrypt_failed"),
             };
-            let room = match std::str::from_utf8(&plaintext) {
-                Ok(r) if valid_room_name(r) => r.to_string(),
-                _ => {
-                    let _ = send_direct(
-                        state,
-                        conn,
-                        ws_tx,
-                        MessageType::AuthFailure,
-                        br#"{"error":"invalid_room_name"}"#,
-                    )
-                    .await;
-                    return Flow::Continue;
-                }
-            };
+            // The JoinRoom payload is either a bare room name, or a JSON object
+            // { "room": "...", "grant": "..." } carrying a channel-auth grant for
+            // a private/presence room (the socket side of /broadcasting/auth).
+            let (room, grant_token) = parse_join_payload(&plaintext);
+            if !valid_room_name(&room) {
+                let _ = send_direct(
+                    state,
+                    conn,
+                    ws_tx,
+                    MessageType::AuthFailure,
+                    br#"{"error":"invalid_room_name"}"#,
+                )
+                .await;
+                return Flow::Continue;
+            }
 
             // --- Room authorization (Finding 2) --------------------------
             // Being authenticated is not enough to enter any room. Two real,
@@ -686,6 +715,55 @@ async fn handle_packet(
                 )
                 .await;
                 return Flow::Continue;
+            }
+
+            // (c) Per-channel authorization: a private/presence room requires a
+            //     valid channel-auth grant (signed by the app server) that names
+            //     this room and this connection's session id and has not expired.
+            //     The member's user_info for presence comes only from the verified
+            //     grant, never from client JSON. Failure returns the existing
+            //     room_forbidden path — no new failure shape.
+            if state.cfg.room_requires_grant(&room) {
+                let secret = state.cfg.channel_auth_secret.as_deref().unwrap_or("");
+                let sid_hex = conn
+                    .session_id
+                    .map(|u| u.simple().to_string())
+                    .unwrap_or_default();
+                let now = chrono::Utc::now().timestamp_millis();
+                let verdict = match grant_token.as_deref() {
+                    Some(tok) => {
+                        crate::channel_auth::verify_grant(secret, &room, &sid_hex, tok, now)
+                    }
+                    None => Err(crate::channel_auth::GrantError::Malformed),
+                };
+                match verdict {
+                    Ok(grant) => conn.channel_grant = Some(grant),
+                    Err(e) => {
+                        warn!(
+                            "Room join denied (grant {}): user '{}' → '{}'",
+                            e.reason(),
+                            conn.authed.as_ref().unwrap().username,
+                            room
+                        );
+                        state.plugins.emit_server_event(
+                            "room.denied",
+                            serde_json::json!({
+                                "room": room,
+                                "username": conn.authed.as_ref().unwrap().username,
+                                "reason": e.reason(),
+                            }),
+                        );
+                        let _ = send_direct(
+                            state,
+                            conn,
+                            ws_tx,
+                            MessageType::AuthFailure,
+                            br#"{"error":"room_forbidden"}"#,
+                        )
+                        .await;
+                        return Flow::Continue;
+                    }
+                }
             }
 
             // (b) Policy plugins may veto the join. `join` is a veto hook: a

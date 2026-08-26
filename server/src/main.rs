@@ -9,6 +9,7 @@ mod admin;
 mod api;
 mod auth;
 mod backplane;
+mod channel_auth;
 mod config;
 mod connection;
 mod db;
