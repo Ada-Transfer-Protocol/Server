@@ -1,0 +1,6 @@
+# Local credentials for the `file` auth driver — NEVER commit real users.
+# Copy users.example.json to users.json and fill in real values.
+users.json
+
+# OS litter
+.DS_Store

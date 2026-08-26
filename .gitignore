@@ -16,3 +16,7 @@ adatp.db
 *.db
 dist/
 .omc/
+
+# Server long-term identity seed (v2 handshake) — secret key material, never commit
+adatp-identity.key
+*.identity.key

@@ -1,0 +1,90 @@
+(*
+  AdaTP protocol v2 — authenticated handshake (PROPOSED).
+  Symbolic (Dolev-Yao) model in the applied pi calculus for ProVerif.
+
+  STATUS: RUN — PASSES. ProVerif reports both queries true (session-key secrecy
+  and injective agreement / no MITM). Full output in RESULTS.md. This is a
+  symbolic model (perfect primitives, perfect pinning); it still needs expert
+  review + an audit, and a mixed-version downgrade query, before a security
+  claim rests on it. See ../12-authenticated-handshake.md and ../../SECURITY_MODEL.md §11.
+
+  Goal: with the server's long-term Ed25519 key pinned by the client, show
+    (A) session-key secrecy against an active attacker, and
+    (B) injective agreement of the client on the server's transcript (no MITM).
+  Compare with adatp_v1_handshake.pv, where (B) is expected to FAIL.
+*)
+
+free c: channel.                          (* public network: attacker controls it *)
+
+(* ---- Diffie-Hellman (X25519, abstracted) ---- *)
+type G.
+type exp.
+const g: G.
+fun dhexp(G, exp): G.
+equation forall x: exp, y: exp; dhexp(dhexp(g,x),y) = dhexp(dhexp(g,y),x).
+
+(* ---- Ed25519 signatures (message-recovering verify: the standard ProVerif idiom) ---- *)
+type sskey.
+type spkey.
+fun spk(sskey): spkey.
+fun sign(bitstring, sskey): bitstring.
+reduc forall m: bitstring, k: sskey; checksign(sign(m,k), spk(k)) = m.
+
+(* ---- KDF + AEAD ---- *)
+type key.
+fun hkdf(G): key.
+fun senc(bitstring, key): bitstring.
+reduc forall m: bitstring, k: key; sdec(senc(m,k), k) = m.
+
+(* ---- hashing / labels ---- *)
+fun h(bitstring): bitstring.
+const LABEL_HS: bitstring.
+
+(* ---- queries ---- *)
+free secretMsg: bitstring [private].      (* payload the client sends under the session key *)
+query attacker(secretMsg).                (* (A) secrecy: must remain secret *)
+
+event ServerRan(G, G).                    (* server used (epkC, epkS) *)
+event ClientDone(G, G).                   (* client committed to (epkC, epkS) with the real server *)
+(* (B) injective agreement: every client commit is matched by a distinct server run *)
+query eC: G, eS: G; inj-event(ClientDone(eC, eS)) ==> inj-event(ServerRan(eC, eS)).
+
+(* ---- server (holds ssk; publishes spk(ssk) = the pinned identity) ---- *)
+let Server(ssk: sskey) =
+    in(c, (=LABEL_HS, epkC: G));
+    new y: exp;
+    let epkS = dhexp(g, y) in
+    let th = h((LABEL_HS, epkC, epkS, spk(ssk))) in
+    let sig = sign(th, ssk) in
+    event ServerRan(epkC, epkS);
+    out(c, (epkS, spk(ssk), sig));
+    let ss = dhexp(epkC, y) in
+    let k = hkdf(ss) in
+    (* server accepts the client's confirmation + reads the encrypted payload *)
+    in(c, fin: bitstring);
+    let (=LABEL_HS, =th) = sdec(fin, k) in
+    0.
+
+(* ---- client (pins spkS = the real server public key) ---- *)
+let Client(spkS: spkey) =
+    new x: exp;
+    let epkC = dhexp(g, x) in
+    out(c, (LABEL_HS, epkC));
+    in(c, (epkS: G, spkS2: spkey, sig: bitstring));
+    (* (1) identity check: the received key must equal the pinned key *)
+    if spkS2 = spkS then
+    (* (2) signature over the full transcript must verify under the pinned key:
+           checksign recovers the signed message; bind it to the expected th *)
+    let th = h((LABEL_HS, epkC, epkS, spkS)) in
+    let (=th) = checksign(sig, spkS) in
+    let ss = dhexp(epkS, x) in
+    let k = hkdf(ss) in
+    event ClientDone(epkC, epkS);
+    out(c, senc((LABEL_HS, th), k));      (* ClientAuth confirmation *)
+    out(c, senc(secretMsg, k)).           (* application payload under the session key *)
+
+(* ---- main: one honest server identity, unbounded sessions ---- *)
+process
+    new ssk: sskey;
+    out(c, spk(ssk));                     (* the server's identity key is public/known (pinned) *)
+    ( !Server(ssk) | !Client(spk(ssk)) )

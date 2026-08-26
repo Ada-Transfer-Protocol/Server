@@ -93,8 +93,8 @@ fn now_ms() -> u64 {
 
 /// hex(HMAC-SHA256(secret, body))
 fn sign(secret: &str, body: &str) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
-        .expect("HMAC accepts any key length");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(body.as_bytes());
     mac.finalize()
         .into_bytes()
@@ -329,7 +329,8 @@ impl WebhookManager {
                 self.stat(&d.endpoint_id, |s| {
                     s.delivered.fetch_add(1, Ordering::Relaxed);
                 });
-                self.audit(&d, "delivered", Some(resp.status().as_u16())).await;
+                self.audit(&d, "delivered", Some(resp.status().as_u16()))
+                    .await;
             }
             outcome => {
                 let status = outcome.as_ref().ok().map(|r| r.status().as_u16());
@@ -348,9 +349,13 @@ impl WebhookManager {
                 if d.attempt < MAX_ATTEMPTS {
                     self.audit(&d, "retrying", status).await;
                     let mgr = self.clone();
-                    let retry = Delivery { attempt: d.attempt + 1, ..d };
+                    let retry = Delivery {
+                        attempt: d.attempt + 1,
+                        ..d
+                    };
                     // Exponential backoff: 1s, 5s, 25s, 125s (capped at 5 min).
-                    let delay = std::cmp::min(300, 5u64.pow(retry.attempt.saturating_sub(2)).max(1));
+                    let delay =
+                        std::cmp::min(300, 5u64.pow(retry.attempt.saturating_sub(2)).max(1));
                     tokio::spawn(async move {
                         tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
                         if mgr.queue_tx.try_send(retry).is_err() {
@@ -449,7 +454,8 @@ impl WebhookManager {
             delivery_id: Uuid::new_v4().to_string(),
             attempt: MAX_ATTEMPTS, // no retries for tests
         };
-        self.queue_tx.try_send(d).map_err(|_| "queue full".to_string())
+        self.queue_tx
+            .try_send(d)
+            .map_err(|_| "queue full".to_string())
     }
 }
-

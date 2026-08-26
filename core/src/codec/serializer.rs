@@ -1,6 +1,5 @@
 use super::packet::Packet;
 
-
 pub struct Serializer;
 
 impl Serializer {

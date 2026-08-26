@@ -1,0 +1,77 @@
+# AdaTP — docker compose with a TLS-terminating reverse proxy.
+#
+# The AdaTP server speaks plain HTTP/WebSocket on :3000 and does NOT terminate
+# TLS itself. This stack demonstrates the mandatory-TLS production posture:
+# the server is never published to the host — only Caddy is, on :443 — and
+# Caddy terminates TLS and reverse-proxies (WebSocket-aware) to the server over
+# the private compose network. TLS is REQUIRED in production because the AdaTP
+# session handshake is unauthenticated on its own
+# (see docs/production/security-hardening.md).
+#
+# Quick start (local, self-signed via Caddy's internal CA):
+#   ADATP_ADMIN_TOKEN=$(openssl rand -hex 32) docker compose up --build -d
+#   curl -k https://localhost/healthz
+#
+# Real domain (automatic Let's Encrypt certificate):
+#   SITE_ADDRESS=realtime.example.com \
+#   ADATP_ADMIN_TOKEN=$(openssl rand -hex 32) docker compose up --build -d
+# (DNS for that name must resolve to this host and ports 80/443 be reachable.)
+
+services:
+  adatp-server:
+    build: .
+    image: adatp-server:1.0.0
+    restart: unless-stopped
+    environment:
+      RUST_LOG: "info"
+      AUTH_DRIVER: "file"          # the demo users.json is baked into the image
+      DATABASE_URL: "sqlite:/app/data/adatp.db"
+      # Stable admin token for /admin/v1/*; without it the server generates a
+      # random one at boot and only logs it once.
+      ADMIN_TOKEN: "${ADATP_ADMIN_TOKEN:-change-me-please}"
+    volumes:
+      - adatp-data:/app/data
+    # Deliberately no `ports:` — the server is reachable only through Caddy.
+    expose:
+      - "3000"
+    networks:
+      - adatp
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      adatp-server:
+        condition: service_healthy   # the image ships a HEALTHCHECK
+    ports:
+      - "80:80"     # ACME HTTP-01 challenge + HTTP->HTTPS redirect
+      - "443:443"
+    environment:
+      SITE_ADDRESS: "${SITE_ADDRESS:-localhost}"
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    volumes:
+      - caddy-data:/data       # persist issued certificates across restarts
+      - caddy-config:/config
+    networks:
+      - adatp
+
+# Inline Caddyfile (no extra files needed). Caddy auto-selects TLS: the
+# localhost default uses its internal CA; a real domain triggers automatic
+# ACME. reverse_proxy transparently upgrades the /ws WebSocket.
+configs:
+  caddyfile:
+    content: |
+      {$SITE_ADDRESS:localhost} {
+        reverse_proxy adatp-server:3000
+      }
+
+volumes:
+  adatp-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  adatp:
+    driver: bridge

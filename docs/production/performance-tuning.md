@@ -1,5 +1,11 @@
 # Performance Tuning
 
+> **Guidance, not SLAs.** The reference numbers below are illustrative
+> (debug-build, laptop). Treat them as a cost model; get real figures from the
+> harness in [sizing.md](./sizing.md) and the results in
+> [benchmarks.md](./benchmarks.md). AdaTP v1 is **single-node** — none of these
+> knobs add clustering.
+
 The honest list: AdaTP v1 has few knobs, and the biggest wins are not knobs
 at all — they are build type, room shape, and OS limits. Measure before and
 after every change with `tools/loadtest` ([sizing.md](./sizing.md)).

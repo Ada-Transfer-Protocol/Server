@@ -1,8 +1,15 @@
 # Security Hardening Checklist
 
-Work through every row before real traffic. Policy background:
-[`../spec/08-security.md`](../spec/08-security.md) and the repository
-`SECURITY.md`.
+Work through every row before real traffic. Policy background: the
+**[security model](../SECURITY_MODEL.md)** (threat model + honest gaps),
+the normative [`../spec/08-security.md`](../spec/08-security.md), and the
+repository `SECURITY.md`.
+
+> **The one non-negotiable:** terminate **TLS (`wss://`)** in front of the
+> server. AdaTP's own crypto is hop-by-hop (not E2E) and its handshake is
+> **unauthenticated**, so TLS is what actually authenticates the server and
+> stops a man-in-the-middle today. Everything else on this page assumes TLS is
+> already in place.
 
 ## 1. Transport
 
@@ -43,6 +50,16 @@ Work through every row before real traffic. Policy background:
       keep info only where your log pipeline is access-controlled).
 - [ ] `MAX_FRAME_BYTES` left at 1 MiB unless you need more — it is your
       memory-amplification bound per message.
+- [ ] `MSG_RATE_LIMIT` sized for your data plane (default 200 msg/s per
+      connection; `0` disables). Exceeding it closes the connection
+      (`rate_limited`) — set it above your busiest legitimate client.
+- [ ] `MAX_CONNECTIONS` sized to the host (default 10000, **enforced**: the
+      WebSocket upgrade returns HTTP 503 over the cap; slot released on close).
+      Pair with `LimitNOFILE`.
+- [ ] Room policy set if you need it: `ROOM_ALLOWLIST` (CSV; non-empty
+      restricts joinable rooms — **include the default `global` lobby**) and
+      `ROOM_PROTECTED_PREFIX` + `ROOM_PROTECTED_ROLE` (prefix-matched rooms
+      require the role). Initial auto-placement into `global` is not gated.
 - [ ] `.env` file `chmod 600`, owned by root, `EnvironmentFile=` in the
       unit (not `Environment=` lines visible in `systemctl show`).
 
@@ -87,9 +104,34 @@ Work through every row before real traffic. Policy background:
 
 ## Known limitations to carry into your threat model
 
-Stated plainly so nobody discovers them in an audit: AdaTP session crypto
-does not authenticate the server (TLS does); message payloads are visible
-to the server process (hop-by-hop, no E2E); replay protection is
-best-effort sequence tracking; the file auth driver stores plaintext
-passwords; admin actions share one token (no per-operator identity —
-front with an authenticating proxy if you need attribution).
+Stated plainly so nobody discovers them in an audit (full detail +
+remediation path in [`../SECURITY_MODEL.md`](../SECURITY_MODEL.md)):
+
+- **No server authentication in the AdaTP layer** — the X25519 handshake is
+  unauthenticated. TLS is the MITM defense. (Ed25519 primitives exist in
+  `adatp-core` but are not yet wired into the handshake — roadmap.)
+- **No end-to-end encryption** — payloads are plaintext in the server process
+  (hop-by-hop; re-encrypted per recipient).
+- **Header integrity gap (empty AAD)** — the AEAD's AAD is empty, so header
+  fields other than the nonce-bound sequence are not authenticated. Anti-replay
+  itself **is** enforced (`SecureSession::decrypt` rejects any sequence at or
+  below the highest already-accepted; the connection is then closed) — it is the
+  header bytes, not replay, that remain uncovered. Roadmap: bind the header as
+  AAD.
+- **Room-join authorization is default-permissive** — a plugin `join` veto hook
+  plus a built-in config policy (`ROOM_ALLOWLIST`, and `ROOM_PROTECTED_PREFIX` /
+  `ROOM_PROTECTED_ROLE`) can restrict joins, but with none configured any
+  authenticated user may join any room name. The initial auto-placement into the
+  default `global` room is **not** policy-gated, so include `global` in any
+  `ROOM_ALLOWLIST`. You can still gate room access in your `api` backend/gateway
+  or use unguessable names.
+- **No L3/L4 volumetric flood scrubbing** — a per-connection message-rate limit
+  (`MSG_RATE_LIMIT`, default 200 msg/s; `0` disables) and an enforced
+  total-connection cap (`MAX_CONNECTIONS`, default 10000) now bound an
+  established connection's data plane and the total socket count, but the server
+  still does not absorb network-layer packet/SYN floods or connection churn.
+  Absorb those at the edge/CDN.
+- **File auth driver stores plaintext passwords** — development/demo only; use
+  `AUTH_DRIVER=api` in production.
+- **One shared admin token** — no per-operator identity; front `/admin` with an
+  authenticating proxy if you need attribution.

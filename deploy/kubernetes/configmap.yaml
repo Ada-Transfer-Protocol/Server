@@ -1,0 +1,36 @@
+# Non-secret environment for the AdaTP server.
+# Every key here is a variable the server actually reads (see
+# server/src/config.rs and server/.env.example). Secrets (ADMIN_TOKEN) live
+# in secret.yaml, not here.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adatp-config
+  labels:
+    app.kubernetes.io/name: adatp-server
+    app.kubernetes.io/component: config
+data:
+  # Networking — single unified port (WebSocket /ws + HTTP control plane).
+  HOST: "0.0.0.0"
+  PORT: "3000"
+
+  # Logging: error|warn|info|debug|trace. Use "warn" at scale (info logs
+  # every connection/auth/join).
+  RUST_LOG: "info"
+
+  # Auth driver: file | api | none.
+  #   file — verify against AUTH_FILE_PATH (the demo users.json baked into the
+  #          image; override with your own for anything real).
+  #   api  — delegate to AUTH_API_URL (uncomment below, set AUTH_DRIVER: api).
+  AUTH_DRIVER: "file"
+  AUTH_FILE_PATH: "/app/users.json"
+  # AUTH_API_URL: "https://auth.internal.example.com/verify"
+
+  # SQLite lives on the mounted PVC (see pvc.yaml / deployment.yaml).
+  DATABASE_URL: "sqlite:/app/data/adatp.db"
+
+  # Limits.
+  MAX_FRAME_BYTES: "1048576"   # 1 MiB max AdaTP payload
+  IDLE_TIMEOUT_SECS: "90"
+  MAX_CONNECTIONS: "10000"     # new connections above this get HTTP 503 at upgrade
+  MSG_RATE_LIMIT: "200"        # per-connection inbound msg/s; 0 disables

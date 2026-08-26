@@ -2,7 +2,7 @@
 //! reference implementation. The vectors file is the same JSON every SDK's
 //! conformance runner consumes (docs/spec/appendix-test-vectors.md).
 
-use adatp_core::codec::packet::{MessageType, Packet, PacketFlags};
+use adatp_core::codec::packet::{MessageType, Packet};
 use adatp_core::crypto::key_derivation::SessionKeys;
 use adatp_core::session::secure_session::{Role, SecureSession};
 use bytes::Bytes;
@@ -58,12 +58,16 @@ fn frame_plaintext_text() {
     let v = vectors();
     let c = case(&v, "frame-plaintext-text");
     let p = build(MessageType::TextMessage, b"Hello, AdaTP!".to_vec(), c);
-    assert_eq!(hex_encode(&p.to_bytes()), c["expected_frame_hex"].as_str().unwrap());
+    assert_eq!(
+        hex_encode(&p.to_bytes()),
+        c["expected_frame_hex"].as_str().unwrap()
+    );
 
     // And back: decode the golden bytes.
-    let decoded =
-        Packet::from_bytes(Bytes::from(hex_decode(c["expected_frame_hex"].as_str().unwrap())))
-            .unwrap();
+    let decoded = Packet::from_bytes(Bytes::from(hex_decode(
+        c["expected_frame_hex"].as_str().unwrap(),
+    )))
+    .unwrap();
     assert_eq!(decoded.header.msg_type, MessageType::TextMessage);
     assert_eq!(&decoded.payload[..], b"Hello, AdaTP!");
 }
@@ -73,7 +77,10 @@ fn frame_plaintext_joinroom() {
     let v = vectors();
     let c = case(&v, "frame-plaintext-joinroom");
     let p = build(MessageType::JoinRoom, b"lobby".to_vec(), c);
-    assert_eq!(hex_encode(&p.to_bytes()), c["expected_frame_hex"].as_str().unwrap());
+    assert_eq!(
+        hex_encode(&p.to_bytes()),
+        c["expected_frame_hex"].as_str().unwrap()
+    );
 }
 
 #[test]
@@ -82,10 +89,22 @@ fn kdf_hkdf_sha256() {
     let c = case(&v, "kdf-hkdf-sha256");
     let secret = hex_decode(c["input"]["shared_secret_hex"].as_str().unwrap());
     let keys = SessionKeys::derive(&secret, &[0u8; 32]);
-    assert_eq!(hex_encode(&keys.client_write_key), c["expected"]["client_write_key"]);
-    assert_eq!(hex_encode(&keys.server_write_key), c["expected"]["server_write_key"]);
-    assert_eq!(hex_encode(&keys.client_iv_root), c["expected"]["client_iv_root"]);
-    assert_eq!(hex_encode(&keys.server_iv_root), c["expected"]["server_iv_root"]);
+    assert_eq!(
+        hex_encode(&keys.client_write_key),
+        c["expected"]["client_write_key"]
+    );
+    assert_eq!(
+        hex_encode(&keys.server_write_key),
+        c["expected"]["server_write_key"]
+    );
+    assert_eq!(
+        hex_encode(&keys.client_iv_root),
+        c["expected"]["client_iv_root"]
+    );
+    assert_eq!(
+        hex_encode(&keys.server_iv_root),
+        c["expected"]["server_iv_root"]
+    );
 }
 
 #[test]
@@ -96,22 +115,26 @@ fn encrypted_text_client_to_server() {
     // Client-side encrypt must reproduce the golden ciphertext (seq 1).
     let keys = derive_keys(c);
     let mut client = SecureSession::new(Role::Client, keys);
-    let (ciphertext, tag, seq) = client.encrypt(b"secret message").unwrap();
-    assert_eq!(seq, 1);
+    let mut p = build(MessageType::TextMessage, Vec::new(), c);
+    let (ciphertext, tag) = client.encrypt(b"secret message", &mut p.header).unwrap();
+    assert_eq!(p.header.sequence, 1);
     assert_eq!(hex_encode(&ciphertext), c["expected"]["ciphertext_hex"]);
     assert_eq!(hex_encode(&tag), c["expected"]["auth_tag_hex"]);
 
-    let mut p = build(MessageType::TextMessage, ciphertext, c);
-    p.header.flags |= PacketFlags::ENCRYPTED;
+    p.payload = Bytes::from(ciphertext);
     p.auth_tag = Some(tag);
-    assert_eq!(hex_encode(&p.to_bytes()), c["expected"]["frame_hex"].as_str().unwrap());
+    assert_eq!(
+        hex_encode(&p.to_bytes()),
+        c["expected"]["frame_hex"].as_str().unwrap()
+    );
 
     // Server-side decrypt of the golden frame.
     let keys = derive_keys(c);
     let mut server = SecureSession::new(Role::Server, keys);
-    let decoded =
-        Packet::from_bytes(Bytes::from(hex_decode(c["expected"]["frame_hex"].as_str().unwrap())))
-            .unwrap();
+    let decoded = Packet::from_bytes(Bytes::from(hex_decode(
+        c["expected"]["frame_hex"].as_str().unwrap(),
+    )))
+    .unwrap();
     assert_eq!(server.decrypt(&decoded).unwrap(), b"secret message");
 }
 
@@ -123,17 +146,20 @@ fn encrypted_gamestate_server_to_client() {
 
     // The vector is server→client at seq 2: burn seq 1 first.
     let mut server = SecureSession::new(Role::Server, derive_keys(c));
-    let _ = server.encrypt(b"x").unwrap(); // seq 1
-    let (ciphertext, tag, seq) = server.encrypt(plaintext).unwrap();
-    assert_eq!(seq, 2);
+    let mut burn = Packet::new(MessageType::TextMessage, Bytes::new(), Uuid::nil());
+    let _ = server.encrypt(b"x", &mut burn.header).unwrap(); // seq 1
+    let mut p = build(MessageType::GameState, Vec::new(), c);
+    let (ciphertext, tag) = server.encrypt(plaintext, &mut p.header).unwrap();
+    assert_eq!(p.header.sequence, 2);
     assert_eq!(hex_encode(&ciphertext), c["expected"]["ciphertext_hex"]);
     assert_eq!(hex_encode(&tag), c["expected"]["auth_tag_hex"]);
 
     // Client decrypts the golden frame.
     let mut client = SecureSession::new(Role::Client, derive_keys(c));
-    let decoded =
-        Packet::from_bytes(Bytes::from(hex_decode(c["expected"]["frame_hex"].as_str().unwrap())))
-            .unwrap();
+    let decoded = Packet::from_bytes(Bytes::from(hex_decode(
+        c["expected"]["frame_hex"].as_str().unwrap(),
+    )))
+    .unwrap();
     assert_eq!(decoded.header.msg_type, MessageType::GameState);
     assert_eq!(client.decrypt(&decoded).unwrap(), plaintext);
 }
@@ -171,9 +197,9 @@ fn reject_tampered_tag() {
 fn codec_roundtrip_all_types() {
     // Every registered type must survive encode→decode unchanged.
     for raw in [
-        0x0001u16, 0x0002, 0x0003, 0x0010, 0x0013, 0x0014, 0x0020, 0x0030, 0x0031, 0x0032,
-        0x0033, 0x0034, 0x0040, 0x0044, 0x0045, 0x0050, 0x0060, 0x0061, 0x0070, 0x0071,
-        0x0072, 0x0080, 0x0081, 0x0090, 0x0093, 0x00A0, 0x00A1, 0x00FF,
+        0x0001u16, 0x0002, 0x0003, 0x0010, 0x0013, 0x0014, 0x0020, 0x0030, 0x0031, 0x0032, 0x0033,
+        0x0034, 0x0040, 0x0044, 0x0045, 0x0050, 0x0060, 0x0061, 0x0070, 0x0071, 0x0072, 0x0080,
+        0x0081, 0x0090, 0x0093, 0x00A0, 0x00A1, 0x00FF,
     ] {
         let t = MessageType::from(raw);
         assert_ne!(t, MessageType::Unknown, "0x{raw:04x} must be a known type");

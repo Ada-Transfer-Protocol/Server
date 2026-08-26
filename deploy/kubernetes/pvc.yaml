@@ -1,0 +1,17 @@
+# Persistent volume for the SQLite database (API keys + persistence).
+# ReadWriteOnce: a single node mounts it, which matches the single-replica,
+# Recreate rollout in deployment.yaml. Do not scale this to multiple replicas
+# sharing one RWO volume.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: adatp-data
+  labels:
+    app.kubernetes.io/name: adatp-server
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

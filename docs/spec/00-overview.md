@@ -92,6 +92,7 @@ the header `version` byte. Version-compatibility policy is defined in
 | [09-extensions.md](09-extensions.md) | Tools, custom events, reserved ranges. |
 | [10-versioning.md](10-versioning.md) | Version byte and compatibility policy. |
 | [11-conformance.md](11-conformance.md) | Conformance levels and test procedure. |
+| [12-authenticated-handshake.md](12-authenticated-handshake.md) | **Proposed v2:** authenticated key exchange (design + [formal model](formal/); not yet implemented). |
 | [appendix-error-codes.md](appendix-error-codes.md) | Error and close-reason registry. |
 | [appendix-test-vectors.md](appendix-test-vectors.md) | Golden test vectors. |
 

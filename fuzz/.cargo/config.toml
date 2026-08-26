@@ -1,0 +1,16 @@
+# The workspace root's .cargo/config.toml redirects crates-io to the vendored
+# `vendor/` directory so release/CI builds are fully offline. The fuzz crate,
+# however, depends on libfuzzer-sys (and its transitive deps), which are NOT
+# vendored because they are a nightly-only development tool.
+#
+# Cargo discovers config files by walking up from the current directory, and
+# the value nearest the working directory wins. Because `cargo +nightly fuzz`
+# runs from this `fuzz/` directory, the override below takes precedence over
+# the parent's vendored replacement and points crates-io back at the live
+# registry so libfuzzer-sys can be fetched. The main workspace build is
+# unaffected (it never enters this directory).
+[source.crates-io]
+replace-with = "crates-io-live"
+
+[source.crates-io-live]
+registry = "sparse+https://index.crates.io/"

@@ -1,8 +1,8 @@
 pub mod codec;
 pub mod crypto;
+pub mod media;
 pub mod session;
 pub mod transport;
-pub mod media;
 
 // Re-exports for convenience
-pub use codec::packet::{Packet, PacketHeader, MessageType, PacketFlags};
+pub use codec::packet::{MessageType, Packet, PacketFlags, PacketHeader};
