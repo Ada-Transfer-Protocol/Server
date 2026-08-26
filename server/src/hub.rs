@@ -1,10 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 use bytes::Bytes;
 use dashmap::DashMap;
 use serde::Serialize;
+use serde_json::Value;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -64,6 +65,27 @@ pub struct RoomView {
     pub members: usize,
 }
 
+/// A presence member as clients see it: a stable id and app-supplied metadata,
+/// both taken from the *signed* channel-auth grant (never from client JSON).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct PresenceMember {
+    pub user_id: String,
+    pub user_info: Value,
+}
+
+/// Collapse a room's per-session members to one entry per `user_id` (a user with
+/// two tabs is one member), ordered by `user_id` for a stable roster.
+fn dedup_roster(members: &HashMap<Uuid, PresenceMember>) -> Vec<PresenceMember> {
+    let mut seen = HashSet::new();
+    let mut out: Vec<PresenceMember> = members
+        .values()
+        .filter(|m| seen.insert(m.user_id.clone()))
+        .cloned()
+        .collect();
+    out.sort_by(|a, b| a.user_id.cmp(&b.user_id));
+    out
+}
+
 /// Central connection registry and room router.
 ///
 /// Locking discipline: `conns` and `rooms` are independent DashMaps; no method
@@ -80,6 +102,10 @@ pub struct Hub {
     /// other nodes. Unset on a single-node deployment — then `broadcast` is
     /// purely in-process.
     publish_tx: OnceLock<mpsc::Sender<(String, RouteMsg, Option<Uuid>)>>,
+    /// Presence rosters: room → (session id → member). Only presence-`* rooms
+    /// have an entry. Node-local: cross-node presence is out of scope for v1
+    /// (documented), so a roster reflects members on *this* node.
+    presence: DashMap<String, HashMap<Uuid, PresenceMember>>,
 }
 
 impl Hub {
@@ -90,6 +116,7 @@ impl Hub {
             rooms: DashMap::new(),
             dropped_msgs: AtomicU64::new(0),
             publish_tx: OnceLock::new(),
+            presence: DashMap::new(),
         }
     }
 
@@ -249,6 +276,46 @@ impl Hub {
         self.deliver_local(room, &msg, None, exclude_session);
     }
 
+    /// Add a presence member (keyed by session). Returns the room's full roster
+    /// after the join (deduped by `user_id`, this member included) and whether
+    /// this is the *first* session for that `user_id` — i.e. whether the room
+    /// should be told `member_added`. A second tab for the same user joins the
+    /// roster silently.
+    pub fn presence_join(
+        &self,
+        room: &str,
+        session: Uuid,
+        member: PresenceMember,
+    ) -> (Vec<PresenceMember>, bool) {
+        let mut entry = self.presence.entry(room.to_string()).or_default();
+        let is_new_user = !entry.values().any(|m| m.user_id == member.user_id);
+        entry.insert(session, member);
+        (dedup_roster(&entry), is_new_user)
+    }
+
+    /// Remove a presence session. Returns `Some(member)` when that was the
+    /// *last* session for the `user_id` — i.e. the room should be told
+    /// `member_removed` — otherwise `None` (the user still has another tab).
+    pub fn presence_leave(&self, room: &str, session: Uuid) -> Option<PresenceMember> {
+        let mut removed_last = None;
+        let mut now_empty = false;
+        if let Some(mut entry) = self.presence.get_mut(room) {
+            if let Some(member) = entry.remove(&session) {
+                let still_present = entry.values().any(|m| m.user_id == member.user_id);
+                if !still_present {
+                    removed_last = Some(member);
+                }
+            }
+            now_empty = entry.is_empty();
+        }
+        // Drop the shard guard (scope above) before removing the room key, so we
+        // never hold a get_mut borrow while locking the same map for remove.
+        if now_empty {
+            self.presence.remove(room);
+        }
+        removed_last
+    }
+
     pub fn connection_count(&self) -> usize {
         self.conns.len()
     }
@@ -301,4 +368,85 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn member(user: &str, name: &str) -> PresenceMember {
+        PresenceMember {
+            user_id: user.to_string(),
+            user_info: json!({ "name": name }),
+        }
+    }
+
+    #[test]
+    fn first_session_is_new_and_appears_in_roster() {
+        let hub = Hub::new();
+        let (roster, is_new) =
+            hub.presence_join("presence-chat", Uuid::from_u128(1), member("u1", "Ada"));
+        assert!(
+            is_new,
+            "the first session for a user announces member_added"
+        );
+        assert_eq!(roster, vec![member("u1", "Ada")]);
+    }
+
+    #[test]
+    fn second_tab_same_user_is_silent_and_deduped() {
+        let hub = Hub::new();
+        hub.presence_join("presence-chat", Uuid::from_u128(1), member("u1", "Ada"));
+        // Same user_id, different session (a second browser tab).
+        let (roster, is_new) =
+            hub.presence_join("presence-chat", Uuid::from_u128(2), member("u1", "Ada"));
+        assert!(!is_new, "a second tab must not re-announce the member");
+        assert_eq!(roster.len(), 1, "the roster dedups by user_id");
+    }
+
+    #[test]
+    fn distinct_users_both_announce_and_roster_is_sorted() {
+        let hub = Hub::new();
+        hub.presence_join("presence-chat", Uuid::from_u128(1), member("u2", "Bee"));
+        let (roster, is_new) =
+            hub.presence_join("presence-chat", Uuid::from_u128(2), member("u1", "Ada"));
+        assert!(is_new);
+        // Sorted by user_id, so u1 before u2 regardless of join order.
+        assert_eq!(roster, vec![member("u1", "Ada"), member("u2", "Bee")]);
+    }
+
+    #[test]
+    fn leave_reports_last_session_only() {
+        let hub = Hub::new();
+        hub.presence_join("presence-chat", Uuid::from_u128(1), member("u1", "Ada"));
+        hub.presence_join("presence-chat", Uuid::from_u128(2), member("u1", "Ada"));
+        // First tab leaves: user still present via the other tab → no member_removed.
+        assert_eq!(
+            hub.presence_leave("presence-chat", Uuid::from_u128(1)),
+            None
+        );
+        // Last tab leaves: now the user is gone → announce member_removed.
+        assert_eq!(
+            hub.presence_leave("presence-chat", Uuid::from_u128(2)),
+            Some(member("u1", "Ada"))
+        );
+    }
+
+    #[test]
+    fn empty_room_is_dropped_and_unknown_leave_is_none() {
+        let hub = Hub::new();
+        hub.presence_join("presence-chat", Uuid::from_u128(1), member("u1", "Ada"));
+        assert_eq!(
+            hub.presence_leave("presence-chat", Uuid::from_u128(1)),
+            Some(member("u1", "Ada"))
+        );
+        // The room key is gone once the last member leaves.
+        assert!(hub.presence.get("presence-chat").is_none());
+        // Leaving a room with no roster is a harmless no-op.
+        assert_eq!(
+            hub.presence_leave("presence-chat", Uuid::from_u128(9)),
+            None
+        );
+    }
 }

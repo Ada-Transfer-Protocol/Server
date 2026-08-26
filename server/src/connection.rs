@@ -117,6 +117,10 @@ struct ConnState {
     /// Verified channel-auth grant for the current private/presence room, if any.
     /// Its `user_info` is the trusted source of presence identity.
     channel_grant: Option<crate::channel_auth::Grant>,
+    /// The `presence-*` room this connection is currently a roster member of, if
+    /// any. Tracked so a room change or disconnect can retract the membership and
+    /// announce `member_removed`.
+    presence_room: Option<String>,
     auth_attempts: u8,
     preauth_violations: u8,
     /// Inbound message rate limiter (per connection).
@@ -134,6 +138,7 @@ impl ConnState {
             hub_id: None,
             room: "global".to_string(),
             channel_grant: None,
+            presence_room: None,
             auth_attempts: 0,
             preauth_violations: 0,
             rate: RateLimiter::new(msg_rate_limit),
@@ -242,6 +247,24 @@ pub async fn run_ws(
     };
 
     // Controlled close & presence cleanup.
+    // Rich presence first: retract this connection's roster membership and, if it
+    // was the user's last session, announce member_removed to the room.
+    if let Some(proom) = conn.presence_room.take() {
+        if let Some(gone) = state.hub.presence_leave(&proom, conn.sid()) {
+            let evt = serde_json::json!({
+                "event": "presence:member_removed", "member": gone,
+            })
+            .to_string();
+            state.hub.broadcast(
+                &proom,
+                RouteMsg {
+                    sender: conn.sid(),
+                    msg_type: MessageType::PresenceUpdate,
+                    payload: Bytes::from(evt.into_bytes()),
+                },
+            );
+        }
+    }
     if let Some(id) = conn.hub_id {
         if let Some((room, session_id)) = state.hub.unregister(id) {
             state.hub.broadcast(
@@ -764,6 +787,10 @@ async fn handle_packet(
                         return Flow::Continue;
                     }
                 }
+            } else {
+                // A public room: drop any grant carried over from a prior
+                // private/presence room so `channel_grant` tracks the current room.
+                conn.channel_grant = None;
             }
 
             // (b) Policy plugins may veto the join. `join` is a veto hook: a
@@ -834,6 +861,77 @@ async fn handle_packet(
                 if !send_direct(state, conn, ws_tx, MessageType::RoomJoined, room.as_bytes()).await
                 {
                     return Flow::Close("write_error");
+                }
+
+                // --- Rich presence (presence-* rooms) ------------------------
+                // A `presence-*` room maintains a member roster. Identity comes
+                // only from the verified grant (`channel_grant`), never from
+                // client input, so a client cannot claim to be another member.
+                let new_member = if room.starts_with("presence-") {
+                    conn.channel_grant.as_ref().and_then(|g| {
+                        g.user_id.as_ref().map(|uid| crate::hub::PresenceMember {
+                            user_id: uid.clone(),
+                            user_info: g.user_info.clone(),
+                        })
+                    })
+                } else {
+                    None
+                };
+                // Retract membership in a previous presence room we've now left.
+                if let Some(prev) = conn.presence_room.take() {
+                    if prev == room {
+                        conn.presence_room = Some(prev); // same room; keep it
+                    } else if let Some(gone) = state.hub.presence_leave(&prev, conn.sid()) {
+                        let evt = serde_json::json!({
+                            "event": "presence:member_removed", "member": gone,
+                        })
+                        .to_string();
+                        state.hub.broadcast(
+                            &prev,
+                            RouteMsg {
+                                sender: conn.sid(),
+                                msg_type: MessageType::PresenceUpdate,
+                                payload: Bytes::from(evt.into_bytes()),
+                            },
+                        );
+                    }
+                }
+                // Enter the new presence room: send the joiner the roster, and
+                // (only for the user's first session) tell the room a member arrived.
+                if let Some(member) = new_member {
+                    let (roster, is_new) =
+                        state.hub.presence_join(&room, conn.sid(), member.clone());
+                    let here = serde_json::json!({
+                        "event": "presence:here", "members": roster,
+                    })
+                    .to_string();
+                    if !send_direct(
+                        state,
+                        conn,
+                        ws_tx,
+                        MessageType::PresenceUpdate,
+                        here.as_bytes(),
+                    )
+                    .await
+                    {
+                        return Flow::Close("write_error");
+                    }
+                    if is_new {
+                        let added = serde_json::json!({
+                            "event": "presence:member_added", "member": member,
+                        })
+                        .to_string();
+                        state.hub.broadcast_except(
+                            &room,
+                            RouteMsg {
+                                sender: conn.sid(),
+                                msg_type: MessageType::PresenceUpdate,
+                                payload: Bytes::from(added.into_bytes()),
+                            },
+                            hub_id,
+                        );
+                    }
+                    conn.presence_room = Some(room.clone());
                 }
             }
             Flow::Continue
