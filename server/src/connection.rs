@@ -952,6 +952,58 @@ async fn handle_packet(
             Flow::Continue
         }
 
+        MessageType::ClientEvent => {
+            if conn.authed.is_none() {
+                return unauthorized(state, conn, ws_tx).await;
+            }
+            let plaintext = match decrypt_in(conn, &packet) {
+                Ok(p) => p,
+                Err(_) => return Flow::Close("decrypt_failed"),
+            };
+            // A "whisper": client-to-client, fanned out to the *other* members of
+            // the room. Three rules, all matching Pusher/Reverb; a violation is
+            // dropped silently (no echo, no error) so a client cannot probe rooms:
+            //   1. only on a private/presence channel, never public,
+            //   2. the event name must be `client-*`,
+            //   3. a small payload (whispers are signals like "typing", not data).
+            if plaintext.len() > 8192 {
+                debug!("client event dropped: payload too large in '{}'", conn.room);
+                return Flow::Continue;
+            }
+            if !state.cfg.room_requires_grant(&conn.room) {
+                debug!(
+                    "client event dropped: '{}' is not a private/presence room",
+                    conn.room
+                );
+                return Flow::Continue;
+            }
+            #[derive(serde::Deserialize)]
+            struct Whisper {
+                event: String,
+            }
+            let named_ok = serde_json::from_slice::<Whisper>(&plaintext)
+                .map(|w| w.event.starts_with("client-") && w.event.len() <= 128)
+                .unwrap_or(false);
+            if !named_ok {
+                debug!(
+                    "client event dropped: event name not client-* in '{}'",
+                    conn.room
+                );
+                return Flow::Continue;
+            }
+            let hub_id = conn.hub_id.expect("authed connection has hub id");
+            state.hub.broadcast_except(
+                &conn.room,
+                RouteMsg {
+                    sender: conn.sid(),
+                    msg_type: MessageType::ClientEvent,
+                    payload: Bytes::from(plaintext),
+                },
+                hub_id,
+            );
+            Flow::Continue
+        }
+
         t if is_routable(t) => {
             if conn.authed.is_none() {
                 return unauthorized(state, conn, ws_tx).await;
@@ -1142,7 +1194,10 @@ fn plaintext_downgrade_rejected(session_exists: bool, t: MessageType) -> bool {
 fn requires_encryption(t: MessageType) -> bool {
     matches!(
         t,
-        MessageType::AuthRequest | MessageType::JoinRoom | MessageType::ToolCall
+        MessageType::AuthRequest
+            | MessageType::JoinRoom
+            | MessageType::ToolCall
+            | MessageType::ClientEvent
     ) || is_routable(t)
 }
 

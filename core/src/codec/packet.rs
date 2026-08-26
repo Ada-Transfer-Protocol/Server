@@ -77,6 +77,10 @@ pub enum MessageType {
     // Rooms
     JoinRoom = 0x00A0,
     RoomJoined = 0x00A1,
+    /// Client-to-client event (a "whisper"): fanned out to the *other* members
+    /// of the sender's private/presence room, never echoed to the sender and
+    /// never persisted. Event names must be `client-*`.
+    ClientEvent = 0x00A2,
 
     Disconnect = 0x00FF,
 
@@ -124,6 +128,7 @@ impl From<u16> for MessageType {
             0x0094 => MessageType::VideoEnd,
             0x00A0 => MessageType::JoinRoom,
             0x00A1 => MessageType::RoomJoined,
+            0x00A2 => MessageType::ClientEvent,
             0x00FF => MessageType::Disconnect,
             _ => MessageType::Unknown,
         }
