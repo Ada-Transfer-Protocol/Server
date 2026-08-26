@@ -4,7 +4,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde_json::json;
@@ -78,6 +78,9 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/ws", get(ws_handler))
         .route("/healthz", get(healthz_handler))
         .route("/readyz", get(readyz_handler))
+        // App-server publish (HMAC-signed; its own auth, not the admin/api-key
+        // layer). Disabled unless ADATP_PUBLISH_SECRET is set.
+        .route("/publish", post(crate::publish::publish_handler))
         .nest("/api", api_routes)
         .nest("/admin/v1", crate::admin::admin_router(state.clone()))
         .nest("/silo", crate::silo::silo_router())

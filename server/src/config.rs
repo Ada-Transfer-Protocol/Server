@@ -65,6 +65,11 @@ pub struct Config {
     /// (rooms route in-process only). When set, room broadcasts also fan out to
     /// every other node subscribed to the same Redis, so rooms span the fleet.
     pub backplane_url: Option<String>,
+    /// Shared secret for the HTTP publish endpoint (`POST /publish`).
+    /// `ADATP_PUBLISH_SECRET`. Unset = the endpoint is disabled (503). When set,
+    /// requests must carry `x-adatp-signature: sha256=<hmac>` over
+    /// `<timestamp>.<body>` and a fresh `x-adatp-timestamp` (replay window).
+    pub publish_secret: Option<String>,
 }
 
 impl Config {
@@ -159,6 +164,10 @@ impl Config {
             .ok()
             .filter(|s| !s.is_empty());
 
+        let publish_secret = env::var("ADATP_PUBLISH_SECRET")
+            .ok()
+            .filter(|s| !s.is_empty());
+
         Self {
             host,
             port,
@@ -177,6 +186,7 @@ impl Config {
             identity_path,
             min_protocol_version,
             backplane_url,
+            publish_secret,
         }
     }
 
@@ -227,6 +237,7 @@ mod tests {
             identity_path: "adatp-identity.key".into(),
             min_protocol_version: 1,
             backplane_url: None,
+            publish_secret: None,
         }
     }
 

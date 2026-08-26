@@ -322,6 +322,7 @@ mod tests {
             identity_path: "adatp-identity.key".into(),
             min_protocol_version: 1,
             backplane_url: None,
+            publish_secret: None,
         }
     }
 

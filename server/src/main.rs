@@ -18,6 +18,7 @@ mod load;
 mod logging;
 mod metrics;
 mod plugins;
+mod publish;
 mod silo;
 mod webhooks;
 

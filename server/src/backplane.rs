@@ -63,8 +63,8 @@ impl Backplane {
             .await
             .map_err(|e| format!("backplane: cannot reach Redis at {addr}: {e}"))?;
 
-        // Publisher: drain (room, msg) from the hub and PUBLISH each.
-        let (tx, rx) = mpsc::channel::<(String, RouteMsg)>(4096);
+        // Publisher: drain (room, msg, exclude_session) from the hub and PUBLISH.
+        let (tx, rx) = mpsc::channel::<(String, RouteMsg, Option<Uuid>)>(4096);
         hub.set_publisher(tx);
         tokio::spawn(publisher_task(addr.clone(), node_id, pub_stream, rx));
 
@@ -89,32 +89,41 @@ fn parse_addr(url: &str) -> String {
     }
 }
 
-/// Frame an envelope: node(16) | msg_type(2 LE) | sender(16) | room_len(2 LE) | room | payload.
-fn encode(node: Uuid, room: &str, msg: &RouteMsg) -> Vec<u8> {
+/// Frame an envelope:
+/// node(16) | msg_type(2 LE) | sender(16) | exclude(16) | room_len(2 LE) | room | payload.
+/// `exclude` is the nil UUID when there is no `->toOthers()` exclusion.
+fn encode(node: Uuid, room: &str, msg: &RouteMsg, exclude: Option<Uuid>) -> Vec<u8> {
     let room_bytes = room.as_bytes();
-    let mut v = Vec::with_capacity(36 + room_bytes.len() + msg.payload.len());
+    let mut v = Vec::with_capacity(52 + room_bytes.len() + msg.payload.len());
     v.extend_from_slice(node.as_bytes());
     v.extend_from_slice(&(msg.msg_type as u16).to_le_bytes());
     v.extend_from_slice(msg.sender.as_bytes());
+    v.extend_from_slice(exclude.unwrap_or(Uuid::nil()).as_bytes());
     v.extend_from_slice(&(room_bytes.len() as u16).to_le_bytes());
     v.extend_from_slice(room_bytes);
     v.extend_from_slice(&msg.payload);
     v
 }
 
-fn decode(buf: &[u8]) -> Option<(Uuid, String, RouteMsg)> {
-    if buf.len() < 36 {
+fn decode(buf: &[u8]) -> Option<(Uuid, String, RouteMsg, Option<Uuid>)> {
+    if buf.len() < 52 {
         return None;
     }
     let node = Uuid::from_slice(&buf[0..16]).ok()?;
     let mtype = u16::from_le_bytes([buf[16], buf[17]]);
     let sender = Uuid::from_slice(&buf[18..34]).ok()?;
-    let room_len = u16::from_le_bytes([buf[34], buf[35]]) as usize;
-    if buf.len() < 36 + room_len {
+    let exclude_raw = Uuid::from_slice(&buf[34..50]).ok()?;
+    let exclude = if exclude_raw.is_nil() {
+        None
+    } else {
+        Some(exclude_raw)
+    };
+    let room_len = u16::from_le_bytes([buf[50], buf[51]]) as usize;
+    if buf.len() < 52 + room_len {
         return None;
     }
-    let room = String::from_utf8(buf[36..36 + room_len].to_vec()).ok()?;
-    let payload = Bytes::copy_from_slice(&buf[36 + room_len..]);
+    let room = String::from_utf8(buf[52..52 + room_len].to_vec()).ok()?;
+    let payload = Bytes::copy_from_slice(&buf[52 + room_len..]);
     Some((
         node,
         room,
@@ -123,6 +132,7 @@ fn decode(buf: &[u8]) -> Option<(Uuid, String, RouteMsg)> {
             msg_type: MessageType::from(mtype),
             payload,
         },
+        exclude,
     ))
 }
 
@@ -142,11 +152,11 @@ async fn publisher_task(
     addr: String,
     node_id: Uuid,
     initial: TcpStream,
-    mut rx: mpsc::Receiver<(String, RouteMsg)>,
+    mut rx: mpsc::Receiver<(String, RouteMsg, Option<Uuid>)>,
 ) {
     let mut stream = Some(initial);
-    while let Some((room, msg)) = rx.recv().await {
-        let frame = encode(node_id, &room, &msg);
+    while let Some((room, msg, exclude)) = rx.recv().await {
+        let frame = encode(node_id, &room, &msg, exclude);
         let cmd = resp_command(&[b"PUBLISH", CHANNEL.as_bytes(), &frame]);
         loop {
             if stream.is_none() {
@@ -202,9 +212,9 @@ async fn run_subscriber(addr: &str, node_id: Uuid, hub: &Arc<Hub>) -> std::io::R
     loop {
         match read_message(&mut reader).await? {
             Some(parts) if parts.len() == 3 && parts[0] == b"message" => {
-                if let Some((node, room, msg)) = decode(&parts[2]) {
+                if let Some((node, room, msg, exclude)) = decode(&parts[2]) {
                     if node != node_id {
-                        hub.broadcast_local(&room, msg);
+                        hub.broadcast_local(&room, msg, exclude);
                     }
                 }
             }

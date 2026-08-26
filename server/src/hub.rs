@@ -76,9 +76,10 @@ pub struct Hub {
     /// Messages dropped because a receiver's queue was full (backpressure).
     pub dropped_msgs: AtomicU64,
     /// When a multi-node backplane is active, room broadcasts are also forwarded
-    /// here (room, msg) so the backplane can publish them to other nodes. Unset
-    /// on a single-node deployment — then `broadcast` is purely in-process.
-    publish_tx: OnceLock<mpsc::Sender<(String, RouteMsg)>>,
+    /// here (room, msg, exclude_session) so the backplane can publish them to
+    /// other nodes. Unset on a single-node deployment — then `broadcast` is
+    /// purely in-process.
+    publish_tx: OnceLock<mpsc::Sender<(String, RouteMsg, Option<Uuid>)>>,
 }
 
 impl Hub {
@@ -94,41 +95,60 @@ impl Hub {
 
     /// Wire the multi-node backplane's publish channel. Called once at startup
     /// when `ADATP_BACKPLANE_URL` is set; a no-op if already set.
-    pub fn set_publisher(&self, tx: mpsc::Sender<(String, RouteMsg)>) {
+    pub fn set_publisher(&self, tx: mpsc::Sender<(String, RouteMsg, Option<Uuid>)>) {
         let _ = self.publish_tx.set(tx);
     }
 
     /// Forward a broadcast to the backplane (other nodes), if one is active.
-    fn forward_to_backplane(&self, room: &str, msg: &RouteMsg) {
+    /// `exclude_session` propagates so remote nodes also skip that connection.
+    fn forward_to_backplane(&self, room: &str, msg: &RouteMsg, exclude_session: Option<Uuid>) {
         if let Some(tx) = self.publish_tx.get() {
             // Non-blocking: if the backplane queue is full, drop (counted) rather
             // than stall the hot path. Cross-node delivery is best-effort, same
             // as the local queues.
-            if tx.try_send((room.to_string(), msg.clone())).is_err() {
+            if tx
+                .try_send((room.to_string(), msg.clone(), exclude_session))
+                .is_err()
+            {
                 self.dropped_msgs.fetch_add(1, Ordering::Relaxed);
             }
         }
     }
 
-    /// Deliver `msg` to local members of `room`, optionally skipping `except`.
-    /// This is the in-process delivery used by every broadcast path; it never
-    /// touches the backplane.
-    fn deliver_local(&self, room: &str, msg: &RouteMsg, except: Option<ConnId>) {
+    /// Deliver `msg` to local members of `room`, optionally skipping the
+    /// connection with `except` (ConnId) and/or `exclude_session` (session id).
+    /// Returns the number of local deliveries. Never touches the backplane.
+    fn deliver_local(
+        &self,
+        room: &str,
+        msg: &RouteMsg,
+        except: Option<ConnId>,
+        exclude_session: Option<Uuid>,
+    ) -> usize {
         let member_ids: Vec<ConnId> = match self.rooms.get(room) {
             Some(members) => members
                 .iter()
                 .copied()
                 .filter(|id| Some(*id) != except)
                 .collect(),
-            None => return,
+            None => return 0,
         };
+        let mut delivered = 0usize;
         for id in member_ids {
             if let Some(entry) = self.conns.get(&id) {
-                if entry.tx.try_send(OutEvent::Route(msg.clone())).is_err() {
+                if let Some(ex) = exclude_session {
+                    if entry.session_id == ex {
+                        continue;
+                    }
+                }
+                if entry.tx.try_send(OutEvent::Route(msg.clone())).is_ok() {
+                    delivered += 1;
+                } else {
                     self.dropped_msgs.fetch_add(1, Ordering::Relaxed);
                 }
             }
         }
+        delivered
     }
 
     /// Register an authenticated connection and place it in `room`.
@@ -193,8 +213,8 @@ impl Hub {
     /// it to the backplane so members on other nodes receive it too.
     /// Slow consumers whose queues are full lose the message (counted).
     pub fn broadcast(&self, room: &str, msg: RouteMsg) {
-        self.deliver_local(room, &msg, None);
-        self.forward_to_backplane(room, &msg);
+        self.deliver_local(room, &msg, None, None);
+        self.forward_to_backplane(room, &msg, None);
     }
 
     /// Like `broadcast`, but skips `except` locally (e.g. a join announcement the
@@ -202,14 +222,31 @@ impl Hub {
     /// exception — on other nodes the excepted connection does not exist, so all
     /// their room members receive it.
     pub fn broadcast_except(&self, room: &str, msg: RouteMsg, except: ConnId) {
-        self.deliver_local(room, &msg, Some(except));
-        self.forward_to_backplane(room, &msg);
+        self.deliver_local(room, &msg, Some(except), None);
+        self.forward_to_backplane(room, &msg, None);
+    }
+
+    /// App-server publish (via `POST /publish`): fan out to `room`, skipping any
+    /// connection whose session id equals `exclude_session` (Laravel's
+    /// `->toOthers()`), across the whole cluster. Returns the LOCAL delivery
+    /// count (remote counts are not collected synchronously).
+    pub fn broadcast_publish(
+        &self,
+        room: &str,
+        msg: RouteMsg,
+        exclude_session: Option<Uuid>,
+    ) -> usize {
+        let n = self.deliver_local(room, &msg, None, exclude_session);
+        self.forward_to_backplane(room, &msg, exclude_session);
+        n
     }
 
     /// Deliver a message that arrived **from the backplane** to local members
-    /// only — never re-published, so there is no cross-node loop.
-    pub fn broadcast_local(&self, room: &str, msg: RouteMsg) {
-        self.deliver_local(room, &msg, None);
+    /// only — never re-published, so there is no cross-node loop. `exclude_session`
+    /// (carried in the backplane envelope) is honoured so `->toOthers()` holds
+    /// even when the excluded connection is on this node.
+    pub fn broadcast_local(&self, room: &str, msg: RouteMsg, exclude_session: Option<Uuid>) {
+        self.deliver_local(room, &msg, None, exclude_session);
     }
 
     pub fn connection_count(&self) -> usize {
